@@ -1,0 +1,1934 @@
+---
+title: "4T1-TCells"
+author: "Ian Schrack"
+date: "2025-01-17"
+output: html_document
+---
+
+```{r}
+library(msigdbr)
+library(cowplot)
+library(tidyr)
+library(dplyr)
+```
+
+
+# T cell subset & processing
+```{r T cell pre-processing}
+Tcell <- subset(AllTissue, subset = CellType %in% c("T Cells"))
+Tcell <- FindVariableFeatures(Tcell, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(Tcell), 10)
+VariableFeaturePlot(Tcell)
+rm(top10)
+
+# Scale Data
+all.genes_Tcell <- rownames(Tcell)
+
+# Adjust computer settings for efficient calculations
+options(future.globals.maxSize = 8000*1024^2)
+future::plan("multisession", workers = 8) # do parallel
+
+Tcell <- ScaleData(Tcell)
+Tcell <- RunPCA(Tcell, features = VariableFeatures(object = Tcell))
+Tcell <- FindNeighbors(Tcell, dims = 1:30, reduction = "harmony")
+Tcell <- FindClusters(Tcell, resolution = 0.4, algorithm = 1, verbose = TRUE)
+Tcell <- RunUMAP(Tcell, dims = 1:30, reduction = "harmony",  min.dist = 0.2, spread = 0.9, n.neighbors = 5)
+```
+
+```{r T cell markers}
+Tcell.markers <- FindAllMarkers(Tcell, min.pct = 0.25, logfc.threshold = 0.25)
+```
+Th1: "Tbx21", "Socs5", "Ccr2", "Ccl5", "Cxcr3"
+Th2: "Gata3", "Nlrp3", "Anxa1", "Prkcd"
+Th17: "Il17a", "Rora", "Ctsh"
+Treg: "Foxp3", "Ctla4", "H2-Ea", "Il2ra"
+
+1 = 
+2 = Th2
+3 = 
+4 = 
+5 = 
+6 = Th17 ??? 
+7 = 
+8 = Cd8
+
+
+```{r Rename Tcell clusters}
+Tcell <- RenameIdents(Tcell, "0" = "Naive Cd4")
+Tcell <- RenameIdents(Tcell, "1" = "Naive Cd4")
+Tcell <- RenameIdents(Tcell, "2" = "Th2")
+Tcell <- RenameIdents(Tcell, "3" = "Treg")
+Tcell <- RenameIdents(Tcell, "4" = "Treg")
+Tcell <- RenameIdents(Tcell, "5" = "Th17")
+Tcell <- RenameIdents(Tcell, "6" = "Th17")
+Tcell <- RenameIdents(Tcell, "7" = "Th17")
+Tcell <- RenameIdents(Tcell, "8" = "Cd8")
+
+Tcell$CellType <- Idents(Tcell)
+```
+
+```{r Rename time points and remove Cd8}
+Tcell$new.day <- Tcell$Day
+Idents(Tcell) <- Tcell$new.day
+
+Tcell <- RenameIdents(Tcell, "D0" = "Healthy")
+Tcell <- RenameIdents(Tcell, "D7" = "Diseased")
+Tcell <- RenameIdents(Tcell, "D14" = "Diseased")
+Tcell <- RenameIdents(Tcell, "D21" = "Diseased")
+
+Tcell$new.day <- Idents(Tcell)
+Tcell$new.day <- factor(Tcell$new.day, levels = c("Healthy", "Diseased"))
+
+Idents(Tcell) <- Tcell$CellType
+
+Tcell <- subset(Tcell, subset = CellType %in% c("Naive Cd4", "Th2", "Treg", "Th17"))
+Tcell$CellType <- factor(Tcell$CellType, levels = c("Naive Cd4", "Th2", "Th17", "Treg"))
+
+Tcell <- subset(Tcell, subset = Tissue %in% c("Lung", "Scaffold", "Blood")) # Remove spleen for this analysis
+Tcell <- subset(Tcell, subset = dataset %in% "Parse") # Remove dropseq 
+
+Tcell$Tissue <- factor(Tcell$Tissue, levels = c("Lung", "Scaffold", "Blood"))
+```
+
+```{r Tcell subtype counts by day tissue and replicate}
+addmargins(table(Tcell@meta.data$CellType, Tcell@meta.data$new.day))
+addmargins(table(Tcell@meta.data$Tissue, Tcell@meta.data$new.day))
+addmargins(table(Tcell@meta.data$CellType, Tcell@meta.data$Tissue))
+addmargins(table(Tcell@meta.data$CellType, Tcell@meta.data$Replicate))
+```
+
+```{r Tcell subtype counts in each tissue split by day}
+print("Lung Post-Filter")
+temp <- subset(Tcell, subset = Tissue == "Lung")
+addmargins(table(temp@meta.data$CellType, temp@meta.data$new.day))
+
+print("Scaffold Post-Filter")
+temp <- subset(Tcell, subset = Tissue == "Scaffold")
+addmargins(table(temp@meta.data$CellType, temp@meta.data$new.day))
+
+print("Blood Post-Filter")
+temp <- subset(Tcell, subset = Tissue == "Blood")
+addmargins(table(temp@meta.data$CellType, temp@meta.data$new.day))
+
+rm(temp)
+```
+
+```{r T cell subset markers dotplot}
+# Plot size (WxH): 1200 x 300
+DotPlot(Tcell, features = c("Cd3e",
+                            "Cd4", 
+                            "Nlrp3", "Anxa1", "Prkcd",
+                            "Rras2", "Ccr7", "Il21r", 
+                            "Gata3", "Rora", "Ctla4", "Il2ra"), scale = F) + 
+  theme(axis.title = element_blank())
+
+# CD8: "Cd8a", "Cd8b1", "Ccr5", "Ccl5"
+```
+
+```{r T cell UMAP}
+# UMAP by CellType
+# Plot size (WxH): 500 x 450
+DimPlot(Tcell, reduction = "umap", pt.size = 1.2, group.by = "CellType", 
+        cols = c("#6BCB77", "#FFD93D", "#F0A1BF", "#FF8C42")) + 
+  theme(axis.line = element_blank(), 
+        axis.title = element_blank(), 
+        axis.text = element_blank(), 
+        axis.ticks = element_blank(), 
+        legend.position = "right") + ggtitle("")
+
+# UMAP by Tissue
+# Plot size (WxH): 500 x 450
+DimPlot(Tcell, reduction = "umap", group.by = "Tissue", pt.size = 1.2, 
+        cols = c("#FF7E79", "#89CFF0", "#A460ED"), order = c("Scaffold")) + 
+  theme(axis.line = element_blank(), 
+        axis.title = element_blank(), 
+        axis.text = element_blank(), 
+        axis.ticks = element_blank(), 
+        legend.position = "right") + ggtitle("")
+
+# UMAP by Day
+# Plot size (WxH): 500 x 450
+DimPlot(Tcell, reduction = "umap", group.by = "Day", pt.size = 0.7) + 
+  theme(axis.line = element_blank(), 
+        axis.title = element_blank(), 
+        axis.text = element_blank(), 
+        axis.ticks = element_blank(), 
+        legend.position = "right") + ggtitle("")
+
+# UMAP by Dataset
+# Plot size (WxH): 500 x 450
+DimPlot(Tcell, reduction = "umap", group.by = "dataset", pt.size = 0.7) + 
+  theme(axis.line = element_blank(), 
+        axis.title = element_blank(), 
+        axis.text = element_blank(), 
+        axis.ticks = element_blank(), 
+        legend.position = "right") + ggtitle("")
+
+
+```
+
+```{r Tcell substype stacked barchart}
+# Lung Stacked Barchart
+temp1 <- subset(Tcell, subset = Tissue == "Lung")
+temp2 <- data.frame(table(temp1@meta.data$CellType, temp1$new.day))
+
+temp2 <- temp2 %>% dplyr::rename(CellType = Var1, new.day = Var2) %>% 
+  dplyr::group_by(new.day) %>% 
+  dplyr::mutate(Percent = Freq / sum(Freq)*100)
+
+# Plot size (WxH): 600 x 500
+SB_lung <- ggplot(temp2, aes(x = new.day, y = Percent, fill = CellType)) + 
+              geom_bar(stat = "identity", colour = "black") + 
+              theme(text = element_text(size = 20, colour = "black"),
+                    axis.text.x = element_text(size = 20, colour = "black"),
+                    axis.text.y = element_text(size = 20, colour = "black"),
+                    axis.line.x = element_blank(),
+                    axis.ticks.x = element_blank(),
+                    axis.line.y = element_line(size = 1, colour = "black", linetype=1),
+                    axis.ticks.length.y = unit(0.25, "cm"),
+                    axis.ticks.y = element_line(size = 1, colour = "black"),
+                    plot.background = element_rect(fill = "transparent", colour = NA_character_), 
+                    panel.background = element_rect(fill = "transparent", colour = NA_character_)) +
+              scale_y_continuous(breaks = seq(0, 100, 20), limits = c(0,100.00001), expand = c(0, 0))
+
+# Scaffold Stacked Barchart
+temp1 <- subset(Tcell, subset = Tissue == "Scaffold")
+temp2 <- data.frame(table(temp1@meta.data$CellType, temp1$new.day))
+
+temp2 <- temp2 %>% dplyr::rename(CellType = Var1, new.day = Var2) %>% 
+  dplyr::group_by(new.day) %>% 
+  dplyr::mutate(Percent = Freq / sum(Freq)*100)
+
+# Plot size (WxH): 600 x 500
+SB_scaf <- ggplot(temp2, aes(x = new.day, y = Percent, fill = CellType)) + 
+              geom_bar(stat = "identity", colour = "black") + 
+              theme(text = element_text(size = 20, colour = "black"),
+                    axis.text.x = element_text(size = 20, colour = "black"),
+                    axis.text.y = element_text(size = 20, colour = "black"),
+                    axis.line.x = element_blank(),
+                    axis.ticks.x = element_blank(),
+                    axis.line.y = element_line(size = 1, colour = "black", linetype=1),
+                    axis.ticks.length.y = unit(0.25, "cm"),
+                    axis.ticks.y = element_line(size = 1, colour = "black"),
+                    plot.background = element_rect(fill = "transparent", colour = NA_character_), 
+                    panel.background = element_rect(fill = "transparent", colour = NA_character_)) +
+              scale_y_continuous(breaks = seq(0, 100, 20), limits = c(0,100.00001), expand = c(0, 0))
+
+# Blood Stacked Barchart
+temp1 <- subset(Tcell, subset = Tissue == "Blood")
+temp2 <- data.frame(table(temp1@meta.data$CellType, temp1$new.day))
+
+temp2 <- temp2 %>% dplyr::rename(CellType = Var1, new.day = Var2) %>% 
+  dplyr::group_by(new.day) %>% 
+  dplyr::mutate(Percent = Freq / sum(Freq)*100)
+
+# Plot size (WxH): 600 x 500
+SB_blood <- ggplot(temp2, aes(x = new.day, y = Percent, fill = CellType)) + 
+              geom_bar(stat = "identity", colour = "black") + 
+              theme(text = element_text(size = 20, colour = "black"),
+                    axis.text.x = element_text(size = 20, colour = "black"),
+                    axis.text.y = element_text(size = 20, colour = "black"),
+                    axis.line.x = element_blank(),
+                    axis.ticks.x = element_blank(),
+                    axis.line.y = element_line(size = 1, colour = "black", linetype=1),
+                    axis.ticks.length.y = unit(0.25, "cm"),
+                    axis.ticks.y = element_line(size = 1, colour = "black"),
+                    plot.background = element_rect(fill = "transparent", colour = NA_character_), 
+                    panel.background = element_rect(fill = "transparent", colour = NA_character_)) +
+              scale_y_continuous(breaks = seq(0, 100, 20), limits = c(0,100.00001), expand = c(0, 0))
+
+# Plot size (WxH): 1000 x 400
+SB_blood + theme(legend.position = "none", axis.title.x = element_blank(), axis.text.x = element_text(size = 13)) + ggtitle("Blood") + 
+  SB_lung + theme(legend.position = "none", legend.title = element_blank(), axis.title = element_blank(), axis.text.x = element_text(size = 13)) + ggtitle("Lung") + 
+  SB_scaf + theme(axis.title.y = element_blank(), axis.title.x = element_blank(), 
+                  legend.position = "right", axis.text.x = element_text(size = 13)) + ggtitle("Scaffold")
+
+# rm(SB_blood, SB_lung, SB_scaf)
+
+# Subset Stacked Barchart colored by tissue
+temp1 <- subset(Tcell, subset = Tissue %in% c("Scaffold", "Lung", "Blood"))
+temp2 <- data.frame(table(temp1@meta.data$CellType, temp1$Tissue))
+
+temp2 <- temp2 %>% dplyr::rename(CellType = Var1, Tissue = Var2) %>% 
+  dplyr::group_by(Tissue) %>% 
+  dplyr::mutate(Percent = Freq / sum(Freq)*100)
+
+# Plot size (WxH): 550 x 400
+ggplot(temp2, aes(x = Tissue, y = Percent, fill = CellType)) + 
+                geom_bar(stat = "identity", colour = "black") + 
+  scale_fill_manual(values=c("#6BCB77", "#FFD93D", "#F0A1BF", "#FF8C42")) + 
+                theme(text = element_blank(),
+                      axis.text.x = element_text(size = 20, colour = "black"),
+                      axis.text.y = element_text(size = 20, colour = "black"),
+                      axis.line.x = element_blank(),
+                      axis.ticks.x = element_blank(),
+                      axis.line.y = element_line(size = 1, colour = "black", linetype=1),
+                      axis.ticks.length.y = unit(0.25, "cm"),
+                      axis.ticks.y = element_line(size = 1, colour = "black"),
+                      plot.background = element_rect(fill = "transparent", colour = NA_character_), 
+                      panel.background = element_rect(fill = "transparent", colour = NA_character_), 
+                      legend.text = element_text(size = 20, colour = "black"), 
+                      legend.title = element_blank()) +
+                scale_y_continuous(breaks = seq(0, 100, 20), limits = c(0,100.00001), expand = c(0, 0))
+
+# c("#6BCB77", "#FFD93D", "#F0A1BF", "#FF8C42")
+# "#7A81FF", "#9437FF", "#FF7E79"
+```
+
+
+
+
+```{r Tcell volcano plots (up in lung)}
+temp <- Tcell
+temp$celltype.day.tissue <- paste(Idents(temp), temp$Day, temp$Tissue, sep = "_")
+Idents(temp) <- "Tissue"
+top_n_genes <- 100
+
+# Lung vs Scaffold T cells
+AT.markers <- FindMarkers(temp, ident.1 = "Lung", ident.2 = "Scaffold", 
+                          min.pct = 0.1, logfc.threshold = 0.25)
+
+AT.markers$gene <- rownames(AT.markers)
+top100 <- AT.markers %>% top_n(n = top_n_genes, wt = avg_log2FC)
+top100pval <- subset(top100, rowSums(top100[5] < 0.05) > 0)
+df_0v7 <- top100pval$gene
+df_0v7 = bitr(df_0v7, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db")
+
+# Generate volcano plot
+AT.markers$diffexpressed <- "NO"
+AT.markers$diffexpressed[AT.markers$avg_log2FC > 0.6 & AT.markers$p_val < 0.05] <- "UP"
+AT.markers$diffexpressed[AT.markers$avg_log2FC < -0.6 & AT.markers$p_val < 0.05] <- "DOWN"
+AT.markers$delabel <- ifelse(AT.markers$gene %in% 
+                               head(AT.markers[order(AT.markers$p_val_adj), 
+                                               "gene"], 30), AT.markers$gene, NA)
+
+ggplot(data = AT.markers, aes(x = avg_log2FC, y = -log10(p_val), colour = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("blue", "grey", "red"),
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + 
+    labs(x = expression("log"[2]*"FC"), y = expression("-log"[10]*"p-value")) +
+  ggtitle('Lung vs Scaffold') + geom_text_repel(max.overlaps = Inf)
+
+# Lung vs Scaffold across time________________________________________________________________________# 
+temp$day.tissue <- paste(temp$Day, temp$Tissue, sep = "_")
+Idents(temp) <- "day.tissue"
+
+# Day 0 Lung vs Scaffold
+AT.markers <- FindMarkers(temp, ident.1 = "D0_Lung", ident.2 = "D0_Scaffold", 
+                          min.pct = 0.1, logfc.threshold = 0.25)
+
+AT.markers$gene <- rownames(AT.markers)
+top100 <- AT.markers %>% top_n(n = top_n_genes, wt = avg_log2FC)
+top100pval <- subset(top100, rowSums(top100[5] < 0.05) > 0)
+d0_LvS <- top100pval$gene
+d0_LvS = bitr(d0_LvS, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db")
+
+# Generate volcano plot
+AT.markers$diffexpressed <- "NO"
+AT.markers$diffexpressed[AT.markers$avg_log2FC > 0.6 & AT.markers$p_val < 0.05] <- "UP"
+AT.markers$diffexpressed[AT.markers$avg_log2FC < -0.6 & AT.markers$p_val < 0.05] <- "DOWN"
+AT.markers$delabel <- ifelse(AT.markers$gene %in% 
+                               head(AT.markers[order(AT.markers$p_val_adj), 
+                                               "gene"], 30), AT.markers$gene, NA)
+
+
+ggplot(data = AT.markers, aes(x = avg_log2FC, y = -log10(p_val), colour = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("blue", "grey", "red"),
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + 
+    labs(x = expression("log"[2]*"FC"), y = expression("-log"[10]*"p-value")) +
+  ggtitle('D0 Lung vs Scaffold') + geom_text_repel(max.overlaps = Inf)
+
+# Day 7 Lung vs Scaffold
+AT.markers <- FindMarkers(temp, ident.1 = "D7_Lung", ident.2 = "D7_Scaffold", 
+                          min.pct = 0.1, logfc.threshold = 0.25)
+
+AT.markers$gene <- rownames(AT.markers)
+top100 <- AT.markers %>% top_n(n = top_n_genes, wt = avg_log2FC)
+top100pval <- subset(top100, rowSums(top100[5] < 0.05) > 0)
+d7_LvS <- top100pval$gene
+d7_LvS = bitr(d7_LvS, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db")
+
+# Generate volcano plot
+AT.markers$diffexpressed <- "NO"
+AT.markers$diffexpressed[AT.markers$avg_log2FC > 0.6 & AT.markers$p_val < 0.05] <- "UP"
+AT.markers$diffexpressed[AT.markers$avg_log2FC < -0.6 & AT.markers$p_val < 0.05] <- "DOWN"
+AT.markers$delabel <- ifelse(AT.markers$gene %in% 
+                               head(AT.markers[order(AT.markers$p_val_adj), 
+                                               "gene"], 30), AT.markers$gene, NA)
+
+
+ggplot(data = AT.markers, aes(x = avg_log2FC, y = -log10(p_val), colour = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("blue", "grey", "red"),
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + 
+    labs(x = expression("log"[2]*"FC"), y = expression("-log"[10]*"p-value")) +
+  ggtitle('D7 Lung vs Scaffold') + geom_text_repel(max.overlaps = Inf)
+
+# Day 14 Lung vs Scaffold
+AT.markers <- FindMarkers(temp, ident.1 = "D14_Lung", ident.2 = "D14_Scaffold", 
+                          min.pct = 0.1, logfc.threshold = 0.25)
+
+AT.markers$gene <- rownames(AT.markers)
+top100 <- AT.markers %>% top_n(n = top_n_genes, wt = avg_log2FC)
+top100pval <- subset(top100, rowSums(top100[5] < 0.05) > 0)
+d14_LvS <- top100pval$gene
+d14_LvS = bitr(d14_LvS, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db")
+
+# Generate volcano plot
+AT.markers$diffexpressed <- "NO"
+AT.markers$diffexpressed[AT.markers$avg_log2FC > 0.6 & AT.markers$p_val < 0.05] <- "UP"
+AT.markers$diffexpressed[AT.markers$avg_log2FC < -0.6 & AT.markers$p_val < 0.05] <- "DOWN"
+AT.markers$delabel <- ifelse(AT.markers$gene %in% 
+                               head(AT.markers[order(AT.markers$p_val_adj), 
+                                               "gene"], 30), AT.markers$gene, NA)
+
+
+ggplot(data = AT.markers, aes(x = avg_log2FC, y = -log10(p_val), colour = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("blue", "grey", "red"),
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + 
+    labs(x = expression("log"[2]*"FC"), y = expression("-log"[10]*"p-value")) +
+  ggtitle('D14 Lung vs Scaffold') + geom_text_repel(max.overlaps = Inf)
+
+# Day 21 Lung vs Scaffold
+AT.markers <- FindMarkers(temp, ident.1 = "D21_Lung", ident.2 = "D21_Scaffold", 
+                          min.pct = 0.1, logfc.threshold = 0.25)
+
+AT.markers$gene <- rownames(AT.markers)
+top100 <- AT.markers %>% top_n(n = top_n_genes, wt = avg_log2FC)
+top100pval <- subset(top100, rowSums(top100[5] < 0.05) > 0)
+d21_LvS <- top100pval$gene
+d21_LvS = bitr(d21_LvS, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db")
+
+# Generate volcano plot
+AT.markers$diffexpressed <- "NO"
+AT.markers$diffexpressed[AT.markers$avg_log2FC > 0.6 & AT.markers$p_val < 0.05] <- "UP"
+AT.markers$diffexpressed[AT.markers$avg_log2FC < -0.6 & AT.markers$p_val < 0.05] <- "DOWN"
+AT.markers$delabel <- ifelse(AT.markers$gene %in% 
+                               head(AT.markers[order(AT.markers$p_val_adj), 
+                                               "gene"], 30), AT.markers$gene, NA)
+
+
+ggplot(data = AT.markers, aes(x = avg_log2FC, y = -log10(p_val), colour = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("blue", "grey", "red"),
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + 
+    labs(x = expression("log"[2]*"FC"), y = expression("-log"[10]*"p-value")) +
+  ggtitle('D21 Lung vs Scaffold') + geom_text_repel(max.overlaps = Inf)
+
+# GO Analysis
+genelist <- list("D0_Lung_vs_Scaffold" = d0_LvS$ENTREZID, 
+                 "D7_Lung_vs_Scaffold" = d7_LvS$ENTREZID, 
+                 "D14_Lung_vs_Scaffold" = d14_LvS$ENTREZID, 
+                 "D21_Lung_vs_Scaffold" = d21_LvS$ENTREZID)
+
+GOclusterplot <- compareCluster(geneCluster = genelist, 
+                                fun = "enrichGO", 
+                                OrgDb = "org.Mm.eg.db")
+temp2 <- GOclusterplot@compareClusterResult
+
+dotplot(GOclusterplot)
+# rm(GOclusterplot)
+# WikiPathways Analysis
+# For reference: https://www.bioconductor.org/packages/devel/bioc/vignettes/rWikiPathways/inst/doc/Pathway-Analysis.html
+genelist <- list("P4_1-vs-P4_2" = df_P4_1vP4_2$ENTREZID)
+WPclusterplot <- enrichWP(sort(df_P4_1vP4_2[[2]], decreasing = TRUE), organism = "Mus musculus")
+
+dotplot(WPclusterplot)
+rm(WPclusterplot)
+```
+
+```{r Tcell volcano plots (up in scaffold)}
+temp <- Tcell
+temp$celltype.day.tissue <- paste(Idents(temp), temp$Day, temp$Tissue, sep = "_")
+Idents(temp) <- "Tissue"
+top_n_genes <- 100
+
+# Lung vs Scaffold T cells
+AT.markers <- FindMarkers(temp, ident.1 = "Scaffold", ident.2 = "Lung", 
+                          min.pct = 0.1, logfc.threshold = 0.25)
+
+AT.markers$gene <- rownames(AT.markers)
+top100 <- AT.markers %>% top_n(n = top_n_genes, wt = avg_log2FC)
+top100pval <- subset(top100, rowSums(top100[5] < 0.05) > 0)
+df_0v7 <- top100pval$gene
+df_0v7 = bitr(df_0v7, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db")
+
+# Generate volcano plot
+AT.markers$diffexpressed <- "NO"
+AT.markers$diffexpressed[AT.markers$avg_log2FC > 0.6 & AT.markers$p_val < 0.05] <- "UP"
+AT.markers$diffexpressed[AT.markers$avg_log2FC < -0.6 & AT.markers$p_val < 0.05] <- "DOWN"
+AT.markers$delabel <- ifelse(AT.markers$gene %in% 
+                               head(AT.markers[order(AT.markers$p_val_adj), 
+                                               "gene"], 30), AT.markers$gene, NA)
+
+ggplot(data = AT.markers, aes(x = avg_log2FC, y = -log10(p_val), colour = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("blue", "grey", "red"),
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + 
+    labs(x = expression("log"[2]*"FC"), y = expression("-log"[10]*"p-value")) +
+  ggtitle('Lung vs Scaffold') + geom_text_repel(max.overlaps = Inf)
+
+# Lung vs Scaffold across time________________________________________________________________________# 
+temp$day.tissue <- paste(temp$Day, temp$Tissue, sep = "_")
+Idents(temp) <- "day.tissue"
+
+# Day 0 Lung vs Scaffold
+AT.markers <- FindMarkers(temp, ident.1 = "D0_Scaffold", ident.2 = "D0_Lung", 
+                          min.pct = 0.1, logfc.threshold = 0.25)
+
+AT.markers$gene <- rownames(AT.markers)
+top100 <- AT.markers %>% top_n(n = top_n_genes, wt = avg_log2FC)
+top100pval <- subset(top100, rowSums(top100[5] < 0.05) > 0)
+d0_LvS <- top100pval$gene
+d0_LvS = bitr(d0_LvS, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db")
+
+# Generate volcano plot
+AT.markers$diffexpressed <- "NO"
+AT.markers$diffexpressed[AT.markers$avg_log2FC > 0.6 & AT.markers$p_val < 0.05] <- "UP"
+AT.markers$diffexpressed[AT.markers$avg_log2FC < -0.6 & AT.markers$p_val < 0.05] <- "DOWN"
+AT.markers$delabel <- ifelse(AT.markers$gene %in% 
+                               head(AT.markers[order(AT.markers$p_val_adj), 
+                                               "gene"], 30), AT.markers$gene, NA)
+
+
+ggplot(data = AT.markers, aes(x = avg_log2FC, y = -log10(p_val), colour = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("blue", "grey", "red"),
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + 
+    labs(x = expression("log"[2]*"FC"), y = expression("-log"[10]*"p-value")) +
+  ggtitle('D0 Scaffold vs Lung') + geom_text_repel(max.overlaps = Inf)
+
+# Day 7 Scaffold vs Lung
+AT.markers <- FindMarkers(temp, ident.1 = "D7_Scaffold", ident.2 = "D7_Lung", 
+                          min.pct = 0.1, logfc.threshold = 0.25)
+
+AT.markers$gene <- rownames(AT.markers)
+top100 <- AT.markers %>% top_n(n = top_n_genes, wt = avg_log2FC)
+top100pval <- subset(top100, rowSums(top100[5] < 0.05) > 0)
+d7_LvS <- top100pval$gene
+d7_LvS = bitr(d7_LvS, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db")
+
+# Generate volcano plot
+AT.markers$diffexpressed <- "NO"
+AT.markers$diffexpressed[AT.markers$avg_log2FC > 0.6 & AT.markers$p_val < 0.05] <- "UP"
+AT.markers$diffexpressed[AT.markers$avg_log2FC < -0.6 & AT.markers$p_val < 0.05] <- "DOWN"
+AT.markers$delabel <- ifelse(AT.markers$gene %in% 
+                               head(AT.markers[order(AT.markers$p_val_adj), 
+                                               "gene"], 30), AT.markers$gene, NA)
+
+
+ggplot(data = AT.markers, aes(x = avg_log2FC, y = -log10(p_val), colour = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("blue", "grey", "red"),
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + 
+    labs(x = expression("log"[2]*"FC"), y = expression("-log"[10]*"p-value")) +
+  ggtitle('D7 Scaffold vs Lung') + geom_text_repel(max.overlaps = Inf)
+
+# Day 14 Scaffold vs Lung
+AT.markers <- FindMarkers(temp, ident.1 = "D14_Scaffold", ident.2 = "D14_Lung", 
+                          min.pct = 0.1, logfc.threshold = 0.25)
+
+AT.markers$gene <- rownames(AT.markers)
+top100 <- AT.markers %>% top_n(n = top_n_genes, wt = avg_log2FC)
+top100pval <- subset(top100, rowSums(top100[5] < 0.05) > 0)
+d14_LvS <- top100pval$gene
+d14_LvS = bitr(d14_LvS, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db")
+
+# Generate volcano plot
+AT.markers$diffexpressed <- "NO"
+AT.markers$diffexpressed[AT.markers$avg_log2FC > 0.6 & AT.markers$p_val < 0.05] <- "UP"
+AT.markers$diffexpressed[AT.markers$avg_log2FC < -0.6 & AT.markers$p_val < 0.05] <- "DOWN"
+AT.markers$delabel <- ifelse(AT.markers$gene %in% 
+                               head(AT.markers[order(AT.markers$p_val_adj), 
+                                               "gene"], 30), AT.markers$gene, NA)
+
+
+ggplot(data = AT.markers, aes(x = avg_log2FC, y = -log10(p_val), colour = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("blue", "grey", "red"),
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + 
+    labs(x = expression("log"[2]*"FC"), y = expression("-log"[10]*"p-value")) +
+  ggtitle('D14 Scaffold vs Lung') + geom_text_repel(max.overlaps = Inf)
+
+# Day 21 Scaffold vs Lung
+AT.markers <- FindMarkers(temp, ident.1 = "D21_Scaffold", ident.2 = "D21_Lung", 
+                          min.pct = 0.1, logfc.threshold = 0.25)
+
+AT.markers$gene <- rownames(AT.markers)
+top100 <- AT.markers %>% top_n(n = top_n_genes, wt = avg_log2FC)
+top100pval <- subset(top100, rowSums(top100[5] < 0.05) > 0)
+d21_LvS <- top100pval$gene
+d21_LvS = bitr(d21_LvS, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db")
+
+# Generate volcano plot
+AT.markers$diffexpressed <- "NO"
+AT.markers$diffexpressed[AT.markers$avg_log2FC > 0.6 & AT.markers$p_val < 0.05] <- "UP"
+AT.markers$diffexpressed[AT.markers$avg_log2FC < -0.6 & AT.markers$p_val < 0.05] <- "DOWN"
+AT.markers$delabel <- ifelse(AT.markers$gene %in% 
+                               head(AT.markers[order(AT.markers$p_val_adj), 
+                                               "gene"], 30), AT.markers$gene, NA)
+
+
+ggplot(data = AT.markers, aes(x = avg_log2FC, y = -log10(p_val), colour = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("blue", "grey", "red"),
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + 
+    labs(x = expression("log"[2]*"FC"), y = expression("-log"[10]*"p-value")) +
+  ggtitle('D21 Scaffold vs Lung') + geom_text_repel(max.overlaps = Inf)
+
+# GO Analysis
+genelist <- list("D0_Scaffold_vs_Lung" = d0_LvS$ENTREZID, 
+                 "D7_Scaffold_vs_Lung" = d7_LvS$ENTREZID, 
+                 "D14_Scaffold_vs_Lung" = d14_LvS$ENTREZID, 
+                 "D21_Scaffold_vs_Lung" = d21_LvS$ENTREZID)
+
+GOclusterplot <- compareCluster(geneCluster = genelist, 
+                                fun = "enrichGO", 
+                                OrgDb = "org.Mm.eg.db")
+
+dotplot(GOclusterplot)
+# rm(GOclusterplot)
+# WikiPathways Analysis
+# For reference: https://www.bioconductor.org/packages/devel/bioc/vignettes/rWikiPathways/inst/doc/Pathway-Analysis.html
+# genelist <- list("P4_1-vs-P4_2" = df_P4_1vP4_2$ENTREZID)
+# WPclusterplot <- enrichWP(sort(df_P4_1vP4_2[[2]], decreasing = TRUE), organism = "Mus musculus")
+# 
+# dotplot(WPclusterplot)
+# rm(WPclusterplot)
+```
+
+```{r T cell scoring}
+library(UCell)
+library(msigdbr)
+
+temp <- subset(Tcell, subset = Tissue %in% c("Blood", "Lung", "Scaffold"))
+msigdbr_genelist = data.frame(msigdbr(species = "mouse", category = "C5"))
+
+#### Th2 #### 
+temp_genelist <- msigdbr_genelist$gene_symbol[msigdbr_genelist$gs_name == "GOBP_T_HELPER_2_CELL_DIFFERENTIATION"]
+
+# UCell Score (takes longer)
+temp <- AddModuleScore_UCell(temp, features = list(temp_genelist[temp_genelist %in% AllTissue_markers$gene]),
+                             name = "Th2_score") # signature_1Cytotoxicity_score
+
+# By cell type
+# Plot size (WxH): 350 x 400
+VlnPlot(subset(temp, subset = Tissue %in% c("Lung", "Scaffold", "Blood")), features = "signature_1Th2_score", pt.size = 0) + 
+  geom_hline(yintercept = 0, linetype = 'dashed', col = 'darkgrey') + 
+  stat_summary(fun = median, geom = "point") + 
+  ylab("Th2 Score") + 
+  theme(plot.title = element_blank(), axis.title.x = element_blank(),
+        legend.position="none")
+
+#### Th1 #### 
+temp_genelist <- msigdbr_genelist$gene_symbol[msigdbr_genelist$gs_name == "GOBP_REGULATION_OF_T_HELPER_1_CELL_DIFFERENTIATION"]
+
+# UCell Score (takes longer)
+temp <- AddModuleScore_UCell(temp, features = list(temp_genelist[temp_genelist %in% AllTissue_markers$gene]),
+                             name = "Th1_score") # signature_1Cytotoxicity_score
+
+# By cell type
+# Plot size (WxH): 350 x 400
+VlnPlot(subset(temp, subset = Tissue %in% c("Lung", "Scaffold", "Blood")), features = "signature_1Th1_score", pt.size = 0) + 
+  geom_hline(yintercept = 0, linetype = 'dashed', col = 'darkgrey') + 
+  stat_summary(fun = median, geom = "point") + 
+  ylab("Th1 Score") + 
+  theme(plot.title = element_blank(), axis.title.x = element_blank(),
+        legend.position="none")
+
+#### Treg #### 
+temp_genelist <- msigdbr_genelist$gene_symbol[msigdbr_genelist$gs_name == "GOBP_REGULATORY_T_CELL_DIFFERENTIATION"]
+
+# UCell Score (takes longer)
+temp <- AddModuleScore_UCell(temp, features = list(temp_genelist[temp_genelist %in% AllTissue_markers$gene]),
+                             name = "Treg_score") # signature_1Cytotoxicity_score
+
+# By cell type
+# Plot size (WxH): 350 x 400
+VlnPlot(subset(temp, subset = Tissue %in% c("Lung", "Scaffold", "Blood")), features = "signature_1Treg_score", pt.size = 0) + 
+  geom_hline(yintercept = 0, linetype = 'dashed', col = 'darkgrey') + 
+  stat_summary(fun = median, geom = "point") + 
+  ylab("Treg Score") + 
+  theme(plot.title = element_blank(), axis.title.x = element_blank(),
+        legend.position="none")
+
+#### Th17 #### 
+temp_genelist <- msigdbr_genelist$gene_symbol[msigdbr_genelist$gs_name == "GOBP_REGULATION_OF_T_HELPER_17_CELL_DIFFERENTIATION"]
+
+# UCell Score (takes longer)
+temp <- AddModuleScore_UCell(temp, features = list(temp_genelist[temp_genelist %in% AllTissue_markers$gene]),
+                             name = "Th17_score") # signature_1Cytotoxicity_score
+
+# By cell type
+# Plot size (WxH): 350 x 400
+VlnPlot(subset(temp, subset = Tissue %in% c("Lung", "Scaffold", "Blood")), features = "signature_1Th17_score", pt.size = 0) + 
+  geom_hline(yintercept = 0, linetype = 'dashed', col = 'darkgrey') + 
+  stat_summary(fun = median, geom = "point") + 
+  ylab("Th17 Score") + 
+  theme(plot.title = element_blank(), axis.title.x = element_blank(),
+        legend.position="none")
+
+
+```
+
+```{r Th2 volcano plots}
+temp <- Tcell
+temp$celltype.tissue <- paste(Idents(temp), temp$Tissue, sep = "_")
+Idents(temp) <- "celltype.tissue"
+top_n_genes <- 100
+
+# Lung vs Scaffold T cells
+AT.markers <- FindMarkers(temp, ident.1 = "Th2_Scaffold", ident.2 = "Th2_Lung", 
+                          min.pct = 0.1, logfc.threshold = 0.25)
+
+AT.markers$gene <- rownames(AT.markers)
+top100 <- AT.markers %>% top_n(n = top_n_genes, wt = avg_log2FC)
+top100pval <- subset(top100, rowSums(top100[5] < 0.05) > 0)
+df_0v7 <- top100pval$gene
+df_0v7 = bitr(df_0v7, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db")
+
+# Generate volcano plot
+AT.markers$diffexpressed <- "NO"
+AT.markers$diffexpressed[AT.markers$avg_log2FC > 0.6 & AT.markers$p_val < 0.05] <- "UP"
+AT.markers$diffexpressed[AT.markers$avg_log2FC < -0.6 & AT.markers$p_val < 0.05] <- "DOWN"
+AT.markers$delabel <- ifelse(AT.markers$gene %in% 
+                               head(AT.markers[order(AT.markers$p_val_adj), 
+                                               "gene"], 30), AT.markers$gene, NA)
+
+ggplot(data = AT.markers, aes(x = avg_log2FC, y = -log10(p_val), colour = diffexpressed, label = delabel)) +
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = 'dashed') +
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = 'dashed') +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("blue", "grey", "red"),
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + 
+    labs(x = expression("log"[2]*"FC"), y = expression("-log"[10]*"p-value")) +
+  ggtitle('Scaffold vs Lung') + geom_text_repel(max.overlaps = Inf)
+
+
+# GO Analysis Scaf > Lung
+genelist <- list("Th2_Scaffold_vs_Lung" = df_0v7$ENTREZID)
+
+GOclusterplot <- compareCluster(geneCluster = genelist, 
+                                fun = "enrichGO", 
+                                OrgDb = "org.Mm.eg.db")
+
+dotplot(GOclusterplot, showCategory = 10, x = "GeneRatio")
+# rm(GOclusterplot)
+# WikiPathways Analysis
+# For reference: https://www.bioconductor.org/packages/devel/bioc/vignettes/rWikiPathways/inst/doc/Pathway-Analysis.html
+genelist <- list("Th2_Scaffold_vs_Lung" = df_0v7$ENTREZID)
+WPclusterplot <- enrichWP(sort(df_0v7[[2]], decreasing = TRUE), organism = "Mus musculus")
+
+dotplot(WPclusterplot)
+rm(WPclusterplot)
+
+
+
+# Lung vs Scaffold vs Blood T cells
+temp <- subset(Tcell, subset = Tissue %in% c("Lung", "Scaffold", "Blood"))
+temp$celltype.tissue <- paste(Idents(temp), temp$Tissue, sep = "_")
+Idents(temp) <- "celltype.tissue"
+top_n_genes <- 100
+
+scaf.th2 <- FindMarkers(temp, ident.1 = "Th2_Scaffold", min.pct = 0.1, logfc.threshold = 0.25)
+lung.th2 <- FindMarkers(temp, ident.1 = "Th2_Lung", min.pct = 0.1, logfc.threshold = 0.25)
+blood.th2 <- FindMarkers(temp, ident.1 = "Th2_Blood", min.pct = 0.1, logfc.threshold = 0.25)
+
+scaf.th2$gene <- rownames(scaf.th2)
+top100 <- scaf.th2 %>% top_n(n = top_n_genes, wt = avg_log2FC)
+top100pval <- subset(top100, rowSums(top100[5] < 0.05) > 0)
+df_scaf.th2 <- top100pval$gene
+df_scaf.th2 = bitr(df_scaf.th2, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db")
+
+lung.th2$gene <- rownames(lung.th2)
+top100 <- lung.th2 %>% top_n(n = top_n_genes, wt = avg_log2FC)
+top100pval <- subset(top100, rowSums(top100[5] < 0.05) > 0)
+df_lung.th2 <- top100pval$gene
+df_lung.th2 = bitr(df_lung.th2, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db")
+
+blood.th2$gene <- rownames(blood.th2)
+top100 <- blood.th2 %>% top_n(n = top_n_genes, wt = avg_log2FC)
+top100pval <- subset(top100, rowSums(top100[5] < 0.05) > 0)
+df_blood.th2 <- top100pval$gene
+df_blood.th2 = bitr(df_blood.th2, fromType="SYMBOL", toType="ENTREZID", OrgDb="org.Mm.eg.db")
+
+# GO Analysis Scaf > Lung
+genelist <- list("Lung_Th2" = df_lung.th2$ENTREZID, 
+                 "Scaffold_Th2" = df_scaf.th2$ENTREZID, 
+                 "Blood_Th2" = df_blood.th2$ENTREZID)
+
+GOclusterplot <- compareCluster(geneCluster = genelist, 
+                                fun = "enrichGO", 
+                                OrgDb = "org.Mm.eg.db")
+GOclusterplot <- enrichplot::pairwise_termsim(GOclusterplot)
+GOclusterplot <- setReadable(GOclusterplot, "org.Mm.eg.db", "ENTREZID")
+
+p1 <- dotplot(GOclusterplot, showCategory = 20)
+
+p1 + theme(axis.text.x = element_text(size = 10))
+
+scaf.sets <- c("immune receptor activity", 
+       "cytokine receptor activity", 
+       "cytokine binding", 
+       "nuclear receptor activity", 
+       "growth factor receptor binding", 
+       "phosphoprotein phosphatase activity", 
+       "C-C chemokine receptor activity", 
+       "G protein-coupled chemoattractant receptor activity", 
+       "chemokine receptor activity", 
+       "C-C chemokine binding", 
+       "mitogen-activated protein kinase binding", 
+       "chemokine binding")
+
+lung.sets <- c("transcription coactivator binding", 
+               "growth factor binding", 
+               "cytokine binding", 
+               "transcription coregulator binding", 
+               "nuclear receptor activity", 
+               "ligand-activated transcription factor activity", 
+               "protein serine/threonine kinase activity", 
+               "transmembrane receptor protein kinase activity", 
+               "DNA-binding transcription repressor activity", 
+               "cytokine receptor activity", 
+               "cestrogen response element binding", 
+               "DNA-binding transcription repressor activity, RNA polymerase II-specific", 
+               "general transcription initiation factor binding", 
+               "immune receptor activity", 
+               "cell adhesion molecule binding", 
+               "phospholipid binding", 
+               "cell-cell adhesion mediator activity",  
+               "chemokine binding", 
+               "cyclin binding")
+
+gene.set <- c(lung.sets, scaf.sets)
+
+```
+
+```{r Th2 Gene Expression}
+temp <- Tcell
+
+temp_genelist <- msigdbr_genelist$gene_symbol[msigdbr_genelist$gs_name == "GOBP_LEUKOCYTE_MIGRATION"]
+
+DotPlot(subset(temp, subset = Tissue %in% c("Lung", "Scaffold", "Blood")), idents = "Th2", 
+        features = unique(temp_genelist)[1:30], group.by = "Tissue", scale = F) + 
+  coord_flip()
+
+# Data2Talk: "Il4", "Il5", "Ccr4", "Gata3", "Stat5", "Stat6", "Ccr3", "Ccr8", "Cxcr4", "Il4ra", "Tslp", "Irf4", "Il9", "Il10", "Il13", "Il21"
+# GOMF_CHEMOKINE_BINDING: "Ccr7", "Ccr2", "Cxcr4", "Hmgb1", "Itga4", "Itgav", "Itgb1", "Itgb3"
+# GOMF_IMMUNE_RECEPTOR_ACTIVITY: "Ccr7", "Ccr2", "Cxcr6", "Cxcr4", "Csf3r", "Cr1l", "Cd74", "Cd44", "Il10ra", "Ifngr2", "Ifngr1", "Ifnar2", "Ifnar1", "Il21r", "Il1r2", "Il1r1", "Il18r1", "Il17ra", "Il7r", "Il6st", "Il6ra", "Il4ra", "Il31ra"
+# GOMF_CYTOKINE_BINDING: "Ccr7", "Ccr2", "Bmpr2", "Cxcr4", "Ifngr1", "Ifnar1", "Hmgb1", "Il2ra", "Il27ra", "Il1rl1", "Il1r1", "Il18r1", "Itgb3", "Itga4", "Il6ra", "Il31ra", "Nrp1", "Tgfbr1", "Tnfrsf1b", "Tgfbr2"
+# GOMF_CYTOKINE_RECEPTOR_ACTIVITY: "Cd44", "Cxcr6", "Cxcr4", "Il17ra", "Ifngr1", "Ifnar1", "Ifnar2", "Il2ra", "Il27ra", "Il23r", "Il1rl1", "Il18r1", "Il7r", "Il6st", "Il6ra", "Il4ra", "Il31ra", "Il2rg", "Il2rb"
+
+# GOBP_POSITIVE_REGULATION_OF_T_HELPER_CELL_DIFFERENTIATION: "Malt1", "Nfkbiz"
+# GOBP_POSITIVE_REGULATION_OF_T_HELPER_2_CELL_DIFFERENTIATION: "Il4ra"
+# GOBP_POSITIVE_REGULATION_OF_T_HELPER_2_CELL_CYTOKINE_PRODUCTION: "Dennd1b" 
+# GOBP_POSITIVE_REGULATION_OF_T_CELL_PROLIFERATION: "Cd6", "Cd28", "Card11", "Hmgb1", "Coro1a", "Jak2", "Il6st", "Il27ra", "Ptprc", "Prkcq", "Ptpn22", "Tgfbr2", "Stat5b", 
+# GOBP_POSITIVE_REGULATION_OF_T_CELL_MEDIATED_IMMUNITY: "H2-D1", "Dennd1b", "Cyrib", "B2m", "Malt1", "Il1r1", "Il18r1", "Ptprc"
+# GOBP_POSITIVE_REGULATION_OF_T_CELL_CYTOKINE_PRODUCTION: "Malt1", "Il18r1", "Dennd1b", "B2m", "Slamf1", "Sash3"
+# GOBP_POSITIVE_REGULATION_OF_T_CELL_APOPTOTIC_PROCESS: "Trp53", "Prelid1", "Pdcd1", "Lgals9", "Cd274", "Adam8"
+# GOBP_POSITIVE_REGULATION_OF_ALPHA_BETA_T_CELL_DIFFERENTIATION: "Cbfb", "Ap3d1", "Ap3b1", "Tgfbr2", "Runx1", "Malt1", "Itpkb"
+# GOBP_T_CELL_MIGRATION: "Ccr2", "Adam17", "Adam10", "Dock8", "Wnk1", "Ripor2", "Pik3cd", "Msn", "Lrch1", "Itgb7", "Itgal", "Itga4", "Il27ra", "Spn", "Stk39"
+# GOBP_REGULATION_OF_T_CELL_MIGRATION: "Adam17", "Adam10", "Wnk1", "Stk39", "Spn", "Ripor2", "Lrch1", "Itga4", "Il27ra", "Dock8"
+# GOBP_LYMPHOCYTE_MIGRATION: "Adam17", "Adam10", "Crkl", "Crk", "Cd200rl", "Ccr7", "Ccr2", "Msn", "Lrch1", "Itgb7", "Itgal", "Itga4", "Il27ra", "Ext1", "Dock8", "Wnk1", "Wasl", "Stk39", "Stk10", "Spn", "S1pr1", "Ripor2", "Ptk2b", "Plec", "Pik3cd"
+# GOBP_LEUKOCYTE_MIGRATION_INVOLVED_IN_INFLAMMATORY_RESPONSE: "Slamf1"
+# GOBP_LEUKOCYTE_MIGRATION: "B4galt", "Ano6", "Adgre5", "Adam17", "Adam10", "Camk1d", "Coro1a", "Cdc42", "Cd47", "Ccr7", "Cxcr4", "Ext1", "Dock8", "Il17ra", "Il16", "Hmgb1", "Gbf1", "Fyn", "Lck", "Itgb7", "Itgb2", "Itgb1", "Itgal", "Itga6", "Itga4", "Il6ra", "Il27ra", "Myh9", "Msn", "Mia3", "Mcu", "Mapk1", "Lyst", "Lrch1", "Rac2", "Ptk2b", "Prex1", "Plec", "Pik3cd", "Pecam1", "Pde4b", "Slamf1", "Selplg", "Sell", "S1pr1", "Rps19", "Rock1", "Ripor2", "Rhoh", "Rin3", "Rhoa", "Thy1", "Stk39", "Stk10", "Stat5b", "Spn", "Wnk1", "Zap70", "Wdr1", "Wasl", "Vav3", "Vav1"
+
+
+temp_genelist <- unique(c("Malt1", "Nfkbiz", "Il4ra", "Dennd1b", "Cd6", "Cd28", "Card11", "Hmgb1", "Coro1a", "Jak2", "Il6st", "Il27ra", "Ptprc", "Prkcq", "Ptpn22", "Tgfbr2", "Stat5b", "H2-D1", "Dennd1b", "Cyrib", "B2m", "Malt1", "Il1r1", "Il18r1", "Ptprc", "Malt1", "Il18r1", "Dennd1b", "B2m", "Slamf1", "Sash3", "Trp53", "Prelid1", "Pdcd1", "Lgals9", "Cd274", "Adam8", "Cbfb", "Ap3d1", "Ap3b1", "Tgfbr2", "Runx1", "Malt1", "Itpkb", "Ccr2", "Adam17", "Adam10", "Dock8", "Wnk1", "Ripor2", "Pik3cd", "Msn", "Lrch1", "Itgb7", "Itgal", "Itga4", "Il27ra", "Spn", "Stk39", "Adam17", "Adam10", "Wnk1", "Stk39", "Spn", "Ripor2", "Lrch1", "Itga4", "Il27ra", "Dock8", "Adam17", "Adam10", "Crkl", "Crk", "Cd200rl", "Ccr7", "Ccr2", "Msn", "Lrch1", "Itgb7", "Itgal", "Itga4", "Il27ra", "Ext1", "Dock8", "Wnk1", "Wasl", "Stk39", "Stk10", "Spn", "S1pr1", "Ripor2", "Ptk2b", "Plec", "Pik3cd", "Slamf1", "B4galt", "Ano6", "Adgre5", "Adam17", "Adam10", "Camk1d", "Coro1a", "Cdc42", "Cd47", "Ccr7", "Cxcr4", "Ext1", "Dock8", "Il17ra", "Il16", "Hmgb1", "Gbf1", "Fyn", "Lck", "Itgb7", "Itgb2", "Itgb1", "Itgal", "Itga6", "Itga4", "Il6ra", "Il27ra", "Myh9", "Msn", "Mia3", "Mcu", "Mapk1", "Lyst", "Lrch1", "Rac2", "Ptk2b", "Prex1", "Plec", "Pik3cd", "Pecam1", "Pde4b", "Slamf1", "Selplg", "Sell", "S1pr1", "Rps19", "Rock1", "Ripor2", "Rhoh", "Rin3", "Rhoa", "Thy1", "Stk39", "Stk10", "Stat5b", "Spn", "Wnk1", "Zap70", "Wdr1", "Wasl", "Vav3", "Vav1"))
+
+DotPlot(subset(temp, subset = Tissue %in% c("Lung", "Scaffold", "Blood")), idents = "Th2", 
+        features = temp_genelist, group.by = "Tissue", scale = F) + 
+  coord_flip()
+
+# Genes of interest: "Cd44", "Il7r", "Il2ra"
+
+# Lung unique: "Il4ra"
+# Scaffold unique: 
+# Blood unique: "Sell", "Ccr7", "S1pr1", "Tcf7", "Psme2", "Stat1"
+
+# Blood + Lung: "Jak2", "Ctla4", "Tgfbr2", "Il6ra", "Ifngr1"
+# Lung + Scaffold: "Il31ra"
+
+# Differentiation: "Malt1", "Nfkbiz", "Il4ra", "Dennd1b", "Cd6", "Il6st", "Prkcq", "Tgfbr2", "Stat5b", 
+# Activation: "Cd44", "Il7r", "Il2ra", "Card11", "Jak2", "Ctla4", "Ptprc", "Il1r1", "Il18r1", "Slamf1", "Sash3", "Itpkb", "Cd47", "Il17ra", 
+# Migration: "Sell", "Ccr7", "S1pr1", "Tcf7", "Adam10", "Dock8", "Wnk1", "Pik3cd", "Msn", "Itgal", "Itga4", "Spn", "Ptk2b", 
+# Tumor immune resistance: "Camk1d", 
+
+## NOTE:Left off at Lck
+
+# Plot size (WxH): 300 x 400
+VlnPlot(Tcell, group.by = "Tissue", idents = "Th2", features = "Ctla4") + theme(legend.position = "none", axis.title.x = element_blank())
+
+
+activation_genelist <- unique(c("Cd44", "Il2ra", "Ptprc", "Il7r", "Il18r1", "Msn", "Ptk2b", "Ctla4", "Jak2", "Stat5b", "Ifngr1", "Dennd1b", "Tgfbr2", "Cd47", "Il4ra", "Il1r1", "Cd28", "Cd6", "Il6st", "Il27ra", "Il17ra", "Tcf7"))
+
+migration_genelist <- unique(c("Pik3cd", "Itga4", "Sell", "Itgal", "S1pr1", "Spn", "Ccr7", "Adam10"))
+
+
+# Plot size (WxH): 800 x 200
+DotPlot(subset(temp, subset = Tissue %in% c("Lung", "Scaffold", "Blood")), idents = "Th2", 
+        features = activation_genelist, group.by = "Tissue", scale = F, col.min = 0, col.max = 3) + 
+  scale_color_distiller(palette = "Reds", direction = 0) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        axis.text.y = element_text(colour = "black", size = 15), 
+        panel.grid.major = element_line(size = 0.5, linetype = 'solid', colour = "gray"),
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        legend.position="none", 
+        ) + ylab("") + xlab("")
+
+# Plot size (WxH): 800 x 200
+DotPlot(subset(temp, subset = Tissue %in% c("Lung", "Scaffold", "Blood")), idents = "Th2", 
+        features = migration_genelist, group.by = "Tissue", scale = F, col.min = 0, col.max = 3) + 
+  scale_color_distiller(palette = "Reds", direction = 0) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        axis.text.y = element_text(colour = "black", size = 15), 
+        panel.grid.major = element_line(size = 0.5, linetype = 'solid', colour = "gray"),
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        legend.position="none", 
+        ) + ylab("") + xlab("")
+
+# Plot size (WxH): 450 x 300
+DotPlot(Tcell, features = c("Cd3e",
+                            "Cd4", 
+                            "Nlrp3", "Anxa1",
+                            "Rras2", "Il21r", 
+                            "Gata3", "Rora")) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        axis.text.y = element_text(colour = "black", size = 15), 
+        panel.grid.major = element_line(size = 0.5, linetype = 'solid', colour = "gray"),
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        legend.position="right", 
+        ) + ylab("") + xlab("")
+
+```
+
+```{r Compare activation gene expression across tissues}
+activation_genelist <- unique(c("Cd44", "Il2ra", "Ptprc", "Il7r", "Msn", "Ptk2b", "Ctla4", "Jak2", "Ifngr1", "Dennd1b", "Tgfbr2", "Cd47", "Il4ra", "Cd28", "Cd6", "Il6st", "Il27ra", "Il17ra", "Tcf7"))
+
+migration_genelist <- unique(c("Pik3cd", "Itga4", "Sell", "Itgal", "S1pr1", "Spn", "Ccr7", "Adam10"))
+
+
+# Collect information from dotplot
+fig1<- DotPlot(subset(Tcell, subset = Tissue %in% c("Lung", "Scaffold", "Blood")), idents = "Th2", 
+        features = activation_genelist, group.by = "Tissue", scale = F, col.min = 0, col.max = 3) + 
+  scale_color_distiller(palette = "Reds", direction = 0) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        axis.text.y = element_text(colour = "black", size = 15), 
+        panel.grid.major = element_line(size = 0.5, linetype = 'solid', colour = "gray"),
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        legend.position="none", 
+        ) + ylab("") + xlab("")
+
+# Plot the dotplot
+fig1
+
+# Collect scaffold average expression 
+scaf_exp <- fig1$data[fig1$data$id == "Scaffold", ]
+cols <- c(3, 5)
+scaf_exp <- scaf_exp[, cols]
+names(scaf_exp)[names(scaf_exp) == 'avg.exp.scaled'] <- 'Scaffold' 
+
+# Collect lung average expression 
+lung_exp <- fig1$data[fig1$data$id == "Lung", ]
+cols <- c(3, 5)
+lung_exp <- lung_exp[, cols]
+names(lung_exp)[names(lung_exp) == 'avg.exp.scaled'] <- 'Lung'
+
+# Collect blood average expression 
+blood_exp <- fig1$data[fig1$data$id == "Blood", ]
+cols <- c(3, 5)
+blood_exp <- blood_exp[, cols]
+names(blood_exp)[names(blood_exp) == 'avg.exp.scaled'] <- 'Blood'
+
+# Merge the tissues
+merge_exp <- merge(x = scaf_exp, y = c(lung_exp, blood_exp))
+cols <- c(1,2,3,5)
+merge_exp <- merge_exp[,cols]
+
+# Calculate the differences
+merge_exp$SMinusL <- merge_exp$Scaffold - merge_exp$Lung
+merge_exp$BMinusL <- merge_exp$Blood - merge_exp$Lung
+
+# Calcualte the squared difference 
+merge_exp$sqr_SMinusL <- (merge_exp$Scaffold - merge_exp$Lung)^2
+merge_exp$sqr_BMinusL <- (merge_exp$Blood - merge_exp$Lung)^2
+
+# Renames features.plot to Genes
+names(merge_exp)[names(merge_exp) == 'features.plot'] <- 'Genes'
+
+# Change df format into one readable by ggplot
+dfm <- melt(merge_exp[,c('Genes','SMinusL','BMinusL')],id.vars = 1)
+dfm <- dfm %>% dplyr::group_by(variable) %>% dplyr::arrange(desc(abs(value)))
+
+# Calculate the spearman correlation coefficient between scaffold & lung, and blood & lung
+a <- cor(merge_exp$Scaffold, merge_exp$Lung, method = "spearman") 
+b <- cor(merge_exp$Blood, merge_exp$Lung, method = "spearman") 
+c <- data.frame(name = c("Scaf vs Lung", "Blood Vs Lung"), value = c(a, b))
+
+#### Plotting ####
+# Plot the difference between scaffold & lung, and blood & lung as a waterfall plot
+# Plot size (WxH): 800 x 300
+ggplot(dfm, aes(x = Genes, y = value, width = 0.6)) + geom_bar(stat = "identity", aes(fill = variable), position = "dodge") + 
+  scale_fill_manual(values = c("#D783FF", "#FF7E79"), labels = c("Scaffold - Lung", "Blood - Lung")) + ylim(-1.5, 1.5) + labs(fill = "Comparison") + 
+  theme(panel.background = element_blank(), 
+        panel.grid.major.y = element_line(color = "black", linewidth = 0.5, linetype = "solid"),
+        panel.grid.major.x = element_blank(), 
+        axis.text.y = element_text(face = "bold", size = 12),
+        axis.text.x = element_text(face = "bold", size = 12, angle = 90), 
+        axis.title.y = element_text(face = "bold", size = 15), 
+        axis.title.x = element_blank()) + ylab("Difference in \nAvg Expression") + 
+  geom_vline(xintercept = seq(0.5, length(dfm$Genes), by = 1), color="gray", size=.5, alpha=.5)
+
+# Spearman correlation
+# Plot size (WxH): 400 x 400
+ggplot(c, aes(x = name, y = value)) + geom_bar(stat = "identity", fill = c("#D783FF", "#FF7E79")) + ylim(0,1) + 
+  theme(panel.background = element_blank(), 
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"), 
+        axis.text.y = element_text(face = "bold", size = 12),
+        axis.text.x = element_text(size = 12), 
+        axis.title.y = element_text(face = "bold", size = 15), 
+        axis.title.x = element_blank()) + 
+  ylab("Spearman Correlation \nCoefficient")
+
+# Sum of Differences
+# Plot size (WxH): 400 x 400
+# c(sum(merge_exp$SMinusL), sum(merge_exp$BMinusL))
+df <- data.frame(name = c("Scaffold - Lung", "Blood - Lung"), value = c(sum(merge_exp$SMinusL), sum(merge_exp$BMinusL)))
+ggplot(df, aes(x = name, y = abs(value))) + geom_bar(stat = "identity", aes(fill = name)) + 
+  scale_fill_manual(values = c("Red", "Purple")) + ylim(0, 8) + 
+    theme(panel.background = element_blank(), 
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"), 
+        axis.text.y = element_text(face = "bold", size = 12),
+        axis.text.x = element_text(face = "bold", size = 12), 
+        axis.title.y = element_text(face = "bold", size = 15), 
+        axis.title.x = element_blank(), 
+        legend.position = "none") + 
+  ylab("Abs(Sum of Difference)")
+
+# rm(scaf_exp, lung_exp, blood_exp, cols)
+```
+
+```{r Compare migration gene expression across tissues}
+# Collect information from dotplot
+fig1<- DotPlot(subset(Tcell, subset = Tissue %in% c("Lung", "Scaffold", "Blood")), 
+        features = migration_genelist, group.by = "Tissue", scale = F, col.min = 0, col.max = 3) + 
+  scale_color_distiller(palette = "Reds", direction = 0) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        axis.text.y = element_text(colour = "black", size = 15), 
+        panel.grid.major = element_line(size = 0.5, linetype = 'solid', colour = "gray"),
+        panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        legend.position="none", 
+        ) + ylab("") + xlab("")
+
+# Collect scaffold average expression 
+scaf_exp <- fig1$data[fig1$data$id == "Scaffold", ]
+cols <- c(3, 5)
+scaf_exp <- scaf_exp[, cols]
+names(scaf_exp)[names(scaf_exp) == 'avg.exp.scaled'] <- 'Scaffold' 
+
+# Collect lung average expression 
+lung_exp <- fig1$data[fig1$data$id == "Lung", ]
+cols <- c(3, 5)
+lung_exp <- lung_exp[, cols]
+names(lung_exp)[names(lung_exp) == 'avg.exp.scaled'] <- 'Lung'
+
+# Collect blood average expression 
+blood_exp <- fig1$data[fig1$data$id == "Blood", ]
+cols <- c(3, 5)
+blood_exp <- blood_exp[, cols]
+names(blood_exp)[names(blood_exp) == 'avg.exp.scaled'] <- 'Blood'
+
+# Merge the tissues
+merge_exp <- merge(x = scaf_exp, y = c(lung_exp, blood_exp))
+cols <- c(1,2,3,5)
+merge_exp <- merge_exp[,cols]
+
+# Calculate the differences
+merge_exp$SMinusL <- merge_exp$Scaffold - merge_exp$Lung
+merge_exp$BMinusL <- merge_exp$Blood - merge_exp$Lung
+
+# Renames features.plot to Genes
+names(merge_exp)[names(merge_exp) == 'features.plot'] <- 'Genes'
+
+# Change df format into one readable by ggplot
+dfm <- melt(merge_exp[,c('Genes','SMinusL','BMinusL')],id.vars = 1)
+dfm <- dfm %>% dplyr::group_by(variable) %>% dplyr::arrange(desc(abs(value)))
+
+# Calculate the spearman correlation coefficient between scaffold & lung, and blood & lung
+a <- cor(merge_exp$Scaffold, merge_exp$Lung, method = "spearman") 
+b <- cor(merge_exp$Blood, merge_exp$Lung, method = "spearman") 
+c <- data.frame(name = c("Scaf vs Lung", "Blood Vs Lung"), value = c(a, b))
+
+#### Plotting ####
+# Plot the difference between scaffold & lung, and blood & lung as a waterfall plot
+# Plot size (WxH): 400 x 400
+ggplot(dfm, aes(x = Genes, y = value, width = 0.6)) + geom_bar(stat = "identity", aes(fill = variable), position = "dodge") + 
+  scale_fill_manual(values = c("Purple", "Red"), labels = c("Scaffold - Lung", "Blood - Lung")) + ylim(-1.5, 1.5) + labs(fill = "Comparison") + 
+  theme(panel.background = element_blank(), 
+        panel.grid.major.y = element_line(color = "black", linewidth = 0.5, linetype = "solid"),
+        panel.grid.major.x = element_blank(), 
+        axis.text.y = element_text(face = "bold", size = 12),
+        axis.text.x = element_text(face = "bold", size = 12, angle = 90), 
+        axis.title.y = element_text(face = "bold", size = 15), 
+        axis.title.x = element_blank()) + ylab("Difference in \nAvg Expression") + 
+  geom_vline(xintercept = seq(0.5, length(dfm$Genes), by = 1), color="gray", size=.5, alpha=.5)
+
+# Spearman correlation
+# Plot size (WxH): 400 x 400
+ggplot(c, aes(x = name, y = value)) + geom_bar(stat = "identity", fill = c("Purple", "Red")) + ylim(0,1) + 
+  theme(panel.background = element_blank(), 
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"), 
+        axis.text.y = element_text(face = "bold", size = 12),
+        axis.text.x = element_text(size = 12), 
+        axis.title.y = element_text(face = "bold", size = 15), 
+        axis.title.x = element_blank()) + 
+  ylab("Spearman Correlation \nCoefficient")
+
+# Sum of Differences
+# Plot size (WxH): 400 x 400
+df <- data.frame(name = c("Scaffold - Lung", "Blood - Lung"), value = c(sum(merge_exp$SMinusL), sum(merge_exp$BMinusL)))
+ggplot(df, aes(x = name, y = abs(value))) + geom_bar(stat = "identity", aes(fill = name)) + 
+  scale_fill_manual(values = c("Red", "Purple")) + 
+    theme(panel.background = element_blank(), 
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"), 
+        axis.text.y = element_text(face = "bold", size = 12),
+        axis.text.x = element_text(face = "bold", size = 12), 
+        axis.title.y = element_text(face = "bold", size = 15), 
+        axis.title.x = element_blank(), 
+        legend.position = "none") + 
+  ylab("Sum of Difference")
+
+# rm(scaf_exp, lung_exp, blood_exp, cols)
+```
+
+```{r}
+
+
+
+# Sum of Differences
+# Plot size (WxH): 400 x 400
+df <- data.frame(name = c("Scaffold - Lung", "Blood - Lung"), value = c(sum(merge_exp$SMinusL), sum(merge_exp$BMinusL)))
+ggplot(df, aes(x = name, y = abs(value))) + geom_bar(stat = "identity", aes(fill = name)) + 
+  scale_fill_manual(values = c("Red", "Purple")) + 
+    theme(panel.background = element_blank(), 
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"), 
+        axis.text.y = element_text(face = "bold", size = 12),
+        axis.text.x = element_text(face = "bold", size = 12), 
+        axis.title.y = element_text(face = "bold", size = 15), 
+        axis.title.x = element_blank(), 
+        legend.position = "none") + 
+  ylab("Sum of Difference")
+
+df <- data.frame(name = c("SML", "BML", "SMB"), value = c(mean(merge_exp$SMinusL), mean(merge_exp$BMinusL), mean(merge_exp$SMinusB)))
+ggplot(df, aes(x = name, y = value)) + geom_bar(stat = "identity")
+
+# Box & Whisker (i.e. median + IQR + all data points)
+# Plot size (WxH): 400 x 400
+ggplot(dfm, aes(x = factor(variable), y = value, fill = variable)) + geom_boxplot() + geom_jitter(color="black") + ylim(-1.5, 1.5) + 
+  scale_fill_manual(values = c("Purple", "Red")) + 
+  scale_x_discrete(labels = c("Scaffold - Lung", "Blood - Lung")) + 
+    theme(panel.background = element_blank(), 
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"), 
+        axis.text.y = element_text(face = "bold", size = 12),
+        axis.text.x = element_text(face = "bold", size = 12), 
+        axis.title.y = element_text(face = "bold", size = 15), 
+        axis.title.x = element_blank(), 
+        legend.position = "none") + 
+  ylab("Difference in \nAvg Expression") + 
+  geom_vline(xintercept = seq(0.5, length(dfm$Genes), by = 1), color="gray", size=.5, alpha=.5)
+
+# Average difference + all data points
+ggplot(dfm, aes(x = factor(variable), y = value, fill = variable)) + geom_bar(stat = "summary", fun.y = "mean") + 
+  geom_pointrange(stat = "summary", fun.data = "mean_se") + 
+  geom_jitter(color="black") + ylim(-1.5, 1.5) + 
+  scale_fill_manual(values = c("Purple", "Red")) + 
+  scale_x_discrete(labels = c("Scaffold - Lung", "Blood - Lung")) + 
+    theme(panel.background = element_blank(), 
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"), 
+        axis.text.y = element_text(face = "bold", size = 12),
+        axis.text.x = element_text(face = "bold", size = 12), 
+        axis.title.y = element_text(face = "bold", size = 15), 
+        axis.title.x = element_blank(), 
+        legend.position = "none") + 
+  ylab("Difference in \nAvg Expression") + 
+  geom_vline(xintercept = seq(0.5, length(dfm$Genes), by = 1), color="gray", size=.5, alpha=.5)
+
+```
+
+
+
+
+
+
+
+```{r}
+
+TType <- c("T Cell", "Naive Cd4", "Th2", "Th17", "Treg")
+Activation_Spearman <- data.frame(Type <- TType, 
+                                  Scaf_vs_Lung <- c(0.7596491, 0.7701754, 0.8719298, 0.8596491, 0.8368421), 
+                                  Blood_vs_Lung <- c(0.7087719, 0.8947368, 0.4210526, 0.8666667, 0.854386))
+names(Activation_Spearman)[2] <- "Scaf_vs_Lung"
+names(Activation_Spearman)[3] <- "Blood_vs_Lung"
+
+Migration_Spearman <- c(Type <- TType, 
+                        Scaf_vs_Lung <- c(), 
+                        Blood_vs_Lung <- c())
+
+Activation_Sum <- data.frame(Type <- TType,
+                             Scaf_vs_Lung <- c(-2.342229, -0.6233155, -4.258257, -3.9901508, -3.379624), 
+                             Blood_vs_Lung <- c(4.932334, 4.7473856, 6.657928, -0.6056675, 5.902315))
+
+
+Migration_Sum <- c()
+
+
+ggplot(df, aes(x = name, y = abs(value))) + geom_bar(stat = "identity", aes(fill = name)) + 
+  scale_fill_manual(values = c("Red", "Purple")) + ylim(0, 8) + 
+    theme(panel.background = element_blank(), 
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"), 
+        axis.text.y = element_text(face = "bold", size = 12),
+        axis.text.x = element_text(face = "bold", size = 12), 
+        axis.title.y = element_text(face = "bold", size = 15), 
+        axis.title.x = element_blank(), 
+        legend.position = "none") + 
+  ylab("Abs(Sum of Difference)")
+
+```
+
+
+
+```{r Compare activation gene expression across tissues}
+# Reduced
+# activation_genelist <- unique(c("Cd44", "Il2ra", "Ptprc", "Il7r", "Msn", "Ptk2b", "Ctla4",
+#                                 "Jak2", "Ifngr1", "Dennd1b", "Tgfbr2", "Cd47", "Il4ra",
+#                                 "Cd28", "Cd6", "Il6st", "Il27ra", "Il17ra", "Tcf7"))
+# 
+# migration_genelist <- unique(c("Pik3cd", "Itga4", "Sell", "Itgal", "S1pr1", "Spn", "Ccr7", "Adam10"))
+
+temp <- subset(Tcell, subset = Replicate %in% c("R1", "R2", "R3", "R4"))
+
+# Full List
+activation_genelist <- unique(c("Cd44", "Il2ra", "Ptprc", "Il7r", "Il18r1", "Msn", "Ptk2b", "Ctla4",
+                                "Jak2", "Stat5b", "Ifngr1", "Dennd1b", "Tgfbr2", "Cd47", "Il4ra",
+                                "Il1r1", "Cd28", "Cd6", "Il6st", "Il27ra", "Il17ra", "Tcf7"))
+
+migration_genelist <- unique(c("Pik3cd", "Itga4", "Sell", "Itgal", "S1pr1", "Spn", "Ccr7", "Adam10"))
+
+TType <- c("T Cell", "Naive Cd4", "Th2", "Th17", "Treg")
+
+# activation_genelist, migration_genelist, c(activation_genelist, migration_genelist), VariableFeatures(Tcell)
+gene_set <- VariableFeatures(Tcell)
+
+spearman_output <- matrix(ncol = 3, nrow = length(TType))
+sum_output <- matrix(ncol = 3, nrow = length(TType))
+mse_output <- matrix(ncol = 3, nrow = length(TType))
+# sqr_output <- data.frame(matrix(nrow = length(gene_set), ncol = 2*length(TType)))
+sqr_SML <- list()
+sqr_BML <- list()
+
+
+for (i in 1:length(TType)) {
+  print(TType[i])
+  
+if (i == 1) {
+  fig1<- DotPlot(subset(temp, subset = Tissue %in% c("Lung", "Scaffold", "Blood")), 
+        features = gene_set, group.by = "Tissue", scale = F, col.min = 0, col.max = 3) +
+  scale_color_distiller(palette = "Reds", direction = 0) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        axis.text.y = element_text(colour = "black", size = 15),
+        panel.grid.major = element_line(size = 0.5, linetype = 'solid', colour = "gray"),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_rect(colour = "black", fill=NA, size=1),
+        legend.position="none",
+        ) + ylab("") + xlab("")
+} else {
+  fig1<- DotPlot(subset(temp, subset = Tissue %in% c("Lung", "Scaffold", "Blood")), idents = TType[i],
+        features = gene_set, group.by = "Tissue", scale = F, col.min = 0, col.max = 3) +
+  scale_color_distiller(palette = "Reds", direction = 0) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        axis.text.y = element_text(colour = "black", size = 15),
+        panel.grid.major = element_line(size = 0.5, linetype = 'solid', colour = "gray"),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_rect(colour = "black", fill=NA, size=1),
+        legend.position="none",
+        ) + ylab("") + xlab("")
+}
+
+# Collect scaffold average expression
+scaf_exp <- fig1$data[fig1$data$id == "Scaffold", ]
+cols <- c(3, 5)
+scaf_exp <- scaf_exp[, cols]
+names(scaf_exp)[names(scaf_exp) == 'avg.exp.scaled'] <- 'Scaffold'
+
+# Collect lung average expression
+lung_exp <- fig1$data[fig1$data$id == "Lung", ]
+cols <- c(3, 5)
+lung_exp <- lung_exp[, cols]
+names(lung_exp)[names(lung_exp) == 'avg.exp.scaled'] <- 'Lung'
+
+# Collect blood average expression
+blood_exp <- fig1$data[fig1$data$id == "Blood", ]
+cols <- c(3, 5)
+blood_exp <- blood_exp[, cols]
+names(blood_exp)[names(blood_exp) == 'avg.exp.scaled'] <- 'Blood'
+
+# Merge the tissues
+merge_exp <- merge(x = scaf_exp, y = c(lung_exp, blood_exp))
+cols <- c(1,2,3,5)
+merge_exp <- merge_exp[,cols]
+
+# Calculate the differences
+merge_exp$SMinusL <- merge_exp$Scaffold - merge_exp$Lung
+merge_exp$BMinusL <- merge_exp$Blood - merge_exp$Lung
+
+# Calcualte the squared difference 
+merge_exp$sqr_SMinusL <- (merge_exp$Scaffold - merge_exp$Lung)^2
+merge_exp$sqr_BMinusL <- (merge_exp$Blood - merge_exp$Lung)^2
+
+# Renames features.plot to Genes
+names(merge_exp)[names(merge_exp) == 'features.plot'] <- 'Genes'
+
+# Change df format into one readable by ggplot
+dfm <- melt(merge_exp[,c('Genes','SMinusL','BMinusL')],id.vars = 1)
+dfm <- dfm %>% dplyr::group_by(variable) %>% dplyr::arrange(desc(abs(value)))
+
+# Calculate the spearman correlation coefficient between scaffold & lung, and blood & lung
+a <- cor(merge_exp$Scaffold, merge_exp$Lung, method = "spearman")
+b <- cor(merge_exp$Blood, merge_exp$Lung, method = "spearman")
+c <- data.frame(name = c("Scaf vs Lung", "Blood Vs Lung"), value = c(a, b))
+
+# Calculate output(s)
+spearman_output[i, 1] <- TType[i]
+spearman_output[i, 2] <- c[1,2]
+spearman_output[i, 3] <- c[2,2]
+
+sum_output[i, 1] <- TType[i]
+sum_output[i, 2] <- sum(merge_exp$SMinusL)
+sum_output[i, 3] <- sum(merge_exp$BMinusL)
+
+mse_output[i, 1] <- TType[i]
+mse_output[i, 2] <- mean((merge_exp$SMinusL)^2)
+mse_output[i, 3] <- mean((merge_exp$BMinusL)^2)
+
+sqr_SML[[i]] <- merge_exp$sqr_SMinusL
+sqr_BML[[i]] <- merge_exp$sqr_BMinusL
+
+}
+
+spearman_output <- data.frame(spearman_output)
+names(spearman_output) = c("Type", "Scaf vs Lung", "Blood vs Lung")
+spearman_output$`Scaf vs Lung` <- as.numeric(spearman_output$`Scaf vs Lung`)
+spearman_output$`Blood vs Lung` <- as.numeric(spearman_output$`Blood vs Lung`)
+
+sum_output <- data.frame(sum_output)
+names(sum_output) <- c("Type", "Scaf - Lung", "Blood - Lung")
+sum_output$`Scaf - Lung` <- as.numeric(sum_output$`Scaf - Lung`)
+sum_output$`Blood - Lung` <- as.numeric(sum_output$`Blood - Lung`)
+
+mse_output <- data.frame(mse_output)
+names(mse_output) <- c("Type", "Scaf - Lung", "Blood - Lung")
+mse_output$`Scaf - Lung` <- as.numeric(mse_output$`Scaf - Lung`)
+mse_output$`Blood - Lung` <- as.numeric(mse_output$`Blood - Lung`)
+
+sqr_SML <- data.frame(sqr_SML)
+names(sqr_SML) <- paste("sqr_SML_", TType)
+rownames(sqr_SML) <- merge_exp$Genes
+
+sqr_BML <- data.frame(sqr_BML)
+names(sqr_BML) <- paste("sqr_BML_", TType)
+rownames(sqr_BML) <- merge_exp$Genes
+
+sqr <- merge(sqr_SML, sqr_BML, by = 0) # merge by rownames
+
+# # Change df format to work with ggplot
+spearman_output <- melt(spearman_output[,c("Type", "Scaf vs Lung", "Blood vs Lung")],id.vars = 1)
+spearman_output$Type <- factor(spearman_output$Type, levels = TType)
+spearman_output$variable <- factor(spearman_output$variable, levels = c("Scaf vs Lung", "Blood vs Lung"))
+
+sum_output <- melt(sum_output[,c("Type", "Scaf - Lung", "Blood - Lung")],id.vars = 1)
+sum_output$Type <- factor(sum_output$Type, levels = TType)
+sum_output$variable <- factor(sum_output$variable, levels = c("Scaf - Lung", "Blood - Lung"))
+
+mse_output <- melt(mse_output[,c("Type", "Scaf - Lung", "Blood - Lung")],id.vars = 1)
+mse_output$Type <- factor(mse_output$Type, levels = TType)
+mse_output$variable <- factor(mse_output$variable, levels = c("Scaf - Lung", "Blood - Lung"))
+
+sqr <- melt(sqr, id.vars = 1)
+# Define meta tissue data
+sqr <- sqr %>% separate(variable, c("Delete", "Comparison", "Type"), sep = "_", remove = F)
+sqr$Delete <- NULL
+sqr$variable <- NULL
+sqr$Type <- trimws(sqr$Type)
+sqr$Type <- factor(sqr$Type, levels = TType)
+sqr$Comparison <- factor(sqr$Comparison, levels = c("SML", "BML"))
+
+# Spearman correlation
+# Plot size (WxH): 600 x 300
+ggplot(spearman_output, aes(x = Type, y = value, fill = variable)) + geom_bar(stat = "identity", position = "dodge") + ylim(0,1) +
+  scale_fill_manual(values = c("Purple", "Red")) + 
+  theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+        axis.text.y = element_text(face = "bold", size = 12),
+        axis.text.x = element_text(size = 12),
+        axis.title.y = element_text(face = "bold", size = 15),
+        axis.title.x = element_blank(), 
+        legend.position = "none") +
+  ylab("Spearman Correlation \nCoefficient")
+
+# Abs(Sum of Differences)
+# Plot size (WxH): 600 x 300
+ggplot(sum_output, aes(x = Type, y = abs(value), fill = variable)) + geom_bar(stat = "identity", position = "dodge") + ylim(0,10) + 
+  scale_fill_manual(values = c("Purple", "Red")) +
+    theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+        axis.text.y = element_text(face = "bold", size = 12),
+        axis.text.x = element_text(face = "bold", size = 12),
+        axis.title.y = element_text(face = "bold", size = 15),
+        axis.title.x = element_blank(),
+        legend.position = "none") +
+   ylab(expression(paste("|", Sigma, "(Diff. in Gene Expression)", "|")))
+
+# Sum of Differences
+# Plot size (WxH): 600 x 300
+ggplot(sum_output, aes(x = Type, y = value, fill = variable)) + geom_bar(stat = "identity", position = "dodge") + ylim(-12,12) + 
+  scale_fill_manual(values = c("Purple", "Red")) +
+    theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+        axis.text.y = element_text(face = "bold", size = 12),
+        axis.text.x = element_text(face = "bold", size = 12),
+        axis.title.y = element_text(face = "bold", size = 15),
+        axis.title.x = element_blank(),
+        legend.position = "none") +
+   ylab(expression(paste(Sigma, "(Diff. in Gene Expression)")))
+
+# Mean squared error
+# Plot size (WxH): 600 x 300
+ggplot(mse_output, aes(x = Type, y = value, fill = variable)) + geom_bar(stat = "identity", position = "dodge") + ylim(0, 0.5) + 
+  scale_fill_manual(values = c("Purple", "Red")) +
+    theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+        axis.text.y = element_text(face = "bold", size = 12),
+        axis.text.x = element_text(face = "bold", size = 12),
+        axis.title.y = element_text(face = "bold", size = 15),
+        axis.title.x = element_blank(),
+        legend.position = "none") +
+  ylab("MSE")
+
+# Squared Difference
+# Plot size (WxH): 600 x 300
+ggplot(sqr, aes(x = Type, y = value, fill = Comparison, color = Comparison)) + geom_bar(stat = "summary", fun.y = "mean", position = "dodge") + ylim(0, 1) +  
+  geom_jitter(color="black", alpha = 0.3) + #scale_y_continuous(trans = "log2") + 
+  scale_fill_manual(values = c("#D783FF", "#FF7E79")) + 
+  scale_color_manual(values = c("#9437FF", "#FF2500")) + 
+  theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+        axis.text.y = element_text(color = "black", face = "bold", size = 12),
+        axis.text.x = element_text(color = "black", face = "bold", size = 12),
+        axis.title.y = element_text(color = "black", face = "bold", size = 20),
+        axis.title.x = element_blank(),
+        legend.position = "none", 
+        panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5))  +
+  ylab(expression("(Diff. in Gene Expression)"^2))
+
+
+ggplot(sqr, aes(x = Type, y = value, fill = Comparison, color = Comparison)) + 
+  geom_boxplot() + ylim(0, 1) + 
+  scale_fill_manual(values = c("#D783FF", "#FF7E79")) + 
+  scale_color_manual(values = c("#9437FF", "#FF2500")) + 
+  theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+        axis.text.y = element_text(color = "black", face = "bold", size = 12),
+        axis.text.x = element_text(color = "black", face = "bold", size = 12),
+        axis.title.y = element_text(color = "black", face = "bold", size = 20),
+        axis.title.x = element_blank(),
+        legend.position = "none", 
+        panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5))  +
+  ylab(expression("(Diff. in Gene Expression)"^2)) + 
+  stat_compare_means(aes(group = Comparison), label = "p.signif", method = "wilcox.test", vjust = 5, size = 5, 
+                     method.args = list(alternative = "greater")) # p.signif or p.format
+
+
+
+```
+
+```{r Square diff plotting}
+
+# act_sqr <- sqr
+# mig_sqr <- sqr
+# varfeature_sqr <- sqr
+
+m1 <- ggplot(act_sqr, aes(x = Type, y = value, fill = Comparison, color = Comparison)) + 
+  geom_boxplot(outlier.size = 0) + geom_point(position = position_jitterdodge(jitter.width = 0.5), alpha = 0.3) + 
+  scale_fill_manual(values = c("#D783FF", "#FF7E79")) + 
+  scale_color_manual(values = c("#9437FF", "#FF2500")) + 
+  theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+        axis.text.y = element_text(color = "black", face = "bold", size = 12),
+        axis.text.x = element_text(color = "black", face = "bold", size = 12),
+        axis.title.y = element_text(color = "black", face = "bold", size = 20),
+        axis.title.x = element_blank(),
+        legend.position = "none", 
+        panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5)) + ylim(0, 1) +
+  ylab(expression("(Diff. in Gene Expression)"^2)) # + 
+  # stat_compare_means(aes(group = Comparison), label = "p.format", method = "wilcox.test", vjust = 5, size = 5) # p.signif or p.format
+
+m2 <- ggplot(mig_sqr, aes(x = Type, y = value, fill = Comparison, color = Comparison)) + 
+  geom_boxplot(outlier.size = 0) + geom_point(position = position_jitterdodge(jitter.width = 0.5), alpha = 0.3) + 
+  scale_fill_manual(values = c("#D783FF", "#FF7E79")) + 
+  scale_color_manual(values = c("#9437FF", "#FF2500")) + 
+  theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+        axis.text.y = element_text(color = "black", face = "bold", size = 12),
+        axis.text.x = element_text(color = "black", face = "bold", size = 12),
+        axis.title.y = element_text(color = "black", face = "bold", size = 20),
+        axis.title.x = element_blank(),
+        legend.position = "none", 
+        panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5)) + ylim(0, 1) + 
+  ylab(expression("(Diff. in Gene Expression)"^2)) # + 
+  # stat_compare_means(aes(group = Comparison), label = "p.format", method = "wilcox.test", vjust = 5, size = 5) # p.signif or p.format
+
+# Plot size (WxH): 500 x 800
+cowplot::plot_grid(m1, m2, align = "v", ncol = 1)
+
+
+ggbarplot(mig_sqr, x = "Type", y = "value", fill = "Comparison", color = "Comparison", position = position_dodge(), add = c("mean_se", "jitter")) + 
+  scale_fill_manual(values = c("#D783FF", "#FF7E79")) +
+  scale_color_manual(values = c("#9437FF", "#FF2500")) +
+  theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+        axis.text.y = element_text(color = "black", face = "bold", size = 12),
+        axis.text.x = element_text(color = "black", face = "bold", size = 12),
+        axis.title.y = element_text(color = "black", face = "bold", size = 20),
+        axis.title.x = element_blank(),
+        legend.position = "none",
+        panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5)) +
+  ylim(0, 1) +
+  ylab(expression(paste("|", Sigma, "(Diff. in Gene Expression)", "|"))) + 
+  stat_compare_means(aes(group = Comparison), label = "p.format", method = "wilcox.test", vjust = 5, size = 5) # p.signif or p.format
+
+```
+
+
+```{r Sum plotting}
+
+# act_sum <- sum_output
+# mig_sum <- sum_output
+# varfeature_sum <- sum_output
+
+# Activation
+# Plot size (WxH): 600 x 300
+m1 <- ggplot(act_sum, aes(x = Type, y = abs(value), fill = variable, color = variable)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  scale_fill_manual(values = c("#D783FF", "#FF7E79")) + 
+  scale_color_manual(values = c("#9437FF", "#FF2500")) + 
+  theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+        axis.text.y = element_text(color = "black", face = "bold", size = 12),
+        axis.text.x = element_text(color = "black", face = "bold", size = 12),
+        axis.title.y = element_text(color = "black", face = "bold", size = 20),
+        axis.title.x = element_blank(),
+        legend.position = "none", 
+        panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5)) +
+  ylim(0,10) + 
+  ylab(expression(paste("|", Sigma, "(Diff. in Gene Expression)", "|")))
+
+# Migration
+# Plot size (WxH): 600 x 300
+m2 <- ggplot(mig_sum, aes(x = Type, y = abs(value), fill = variable, color = variable)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  scale_fill_manual(values = c("#D783FF", "#FF7E79")) + 
+  scale_color_manual(values = c("#9437FF", "#FF2500")) + 
+  theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+        axis.text.y = element_text(color = "black", face = "bold", size = 12),
+        axis.text.x = element_text(color = "black", face = "bold", size = 12),
+        axis.title.y = element_text(color = "black", face = "bold", size = 20),
+        axis.title.x = element_blank(),
+        legend.position = "none", 
+        panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5)) +
+  ylim(0,10) + 
+  ylab(expression(paste("|", Sigma, "(Diff. in Gene Expression)", "|")))
+
+# Plot size (WxH): 500 x 800
+cowplot::plot_grid(m1, m2, align = "v", ncol = 1)
+
+# Red outline #FF2500
+# Purple outline #9437FF
+# color = c("#9437FF", "#FF2500")
+
+ggplot(varfeature_sum, aes(x = Type, y = abs(value), fill = variable, color = variable)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  scale_fill_manual(values = c("#D783FF", "#FF7E79")) + 
+  scale_color_manual(values = c("#9437FF", "#FF2500")) + 
+  theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+        axis.text.y = element_text(color = "black", face = "bold", size = 12),
+        axis.text.x = element_text(color = "black", face = "bold", size = 12),
+        axis.title.y = element_text(color = "black", face = "bold", size = 20),
+        axis.title.x = element_blank(),
+        legend.position = "none", 
+        panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5)) +
+  ylim(0,10) + 
+  ylab(expression(paste("|", Sigma, "(Diff. in Gene Expression)", "|")))
+
+```
+
+
+
+
+
+
+```{r Replicates}
+# Reduced
+# activation_genelist <- unique(c("Cd44", "Il2ra", "Ptprc", "Il7r", "Msn", "Ptk2b", "Ctla4","Jak2", "Ifngr1", "Dennd1b", "Tgfbr2", "Cd47", "Il4ra",
+#                                 "Cd28", "Cd6", "Il6st", "Il27ra", "Il17ra", "Tcf7"))
+# 
+# migration_genelist <- unique(c("Pik3cd", "Itga4", "Sell", "Itgal", "S1pr1", "Spn", "Ccr7", "Adam10"))
+
+# Full List
+activation_genelist <- unique(c("Cd44", "Il2ra", "Ptprc", "Il7r", "Il18r1", "Msn", "Ptk2b", "Ctla4",
+                                "Jak2", "Stat5b", "Ifngr1", "Dennd1b", "Tgfbr2", "Cd47", "Il4ra",
+                                "Il1r1", "Cd28", "Cd6", "Il6st", "Il27ra", "Il17ra", "Tcf7"))
+
+migration_genelist <- unique(c("Pik3cd", "Itga4", "Sell", "Itgal", "S1pr1", "Spn", "Ccr7", "Adam10"))
+
+
+TType <- c("T Cell", "Naive Cd4", "Th2", "Th17", "Treg")
+
+# activation_genelist, migration_genelist, c(activation_genelist, migration_genelist), VariableFeatures(Tcell), unique(rownames(Tcell))
+gene_set <- unique(rownames(Tcell))
+
+sum_output <- matrix(ncol = 3, nrow = length(TType))
+sqr_SML <- list()
+sqr_BML <- list()
+sum_mtx <- list()
+
+for (j in 1:(length(unique(Tcell$Replicate)))) {
+  temp <- subset(Tcell, subset = Replicate %in% unique(Tcell$Replicate)[j])
+  print(paste("Replicate = ", unique(Tcell$Replicate)[j]))
+  
+  for (i in 1:length(TType)) {
+      print(paste("TType = ", TType[i]))
+    
+    if (i == 1) {
+        fig1<- DotPlot(subset(temp, subset = Tissue %in% c("Lung", "Scaffold", "Blood")), 
+              features = gene_set, group.by = "Tissue", scale = F, col.min = 0, col.max = 3)
+        } else {
+        fig1<- DotPlot(subset(temp, subset = Tissue %in% c("Lung", "Scaffold", "Blood")), idents = TType[i],
+              features = gene_set, group.by = "Tissue", scale = F, col.min = 0, col.max = 3)
+      }
+      
+      # Collect scaffold average expression
+      scaf_exp <- fig1$data[fig1$data$id == "Scaffold", ]
+      cols <- c(3, 5)
+      scaf_exp <- scaf_exp[, cols]
+      names(scaf_exp)[names(scaf_exp) == 'avg.exp.scaled'] <- 'Scaffold'
+      
+      # Collect lung average expression
+      lung_exp <- fig1$data[fig1$data$id == "Lung", ]
+      cols <- c(3, 5)
+      lung_exp <- lung_exp[, cols]
+      names(lung_exp)[names(lung_exp) == 'avg.exp.scaled'] <- 'Lung'
+      
+      # Collect blood average expression
+      blood_exp <- fig1$data[fig1$data$id == "Blood", ]
+      cols <- c(3, 5)
+      blood_exp <- blood_exp[, cols]
+      names(blood_exp)[names(blood_exp) == 'avg.exp.scaled'] <- 'Blood'
+      
+      # Merge the tissues
+      merge_exp <- merge(x = scaf_exp, y = c(lung_exp, blood_exp))
+      cols <- c(1,2,3,5)
+      merge_exp <- merge_exp[,cols]
+      
+      # Calculate the differences
+      merge_exp$SMinusL <- merge_exp$Scaffold - merge_exp$Lung
+      merge_exp$BMinusL <- merge_exp$Blood - merge_exp$Lung
+      
+      # Renames features.plot to Genes
+      names(merge_exp)[names(merge_exp) == 'features.plot'] <- 'Genes'
+      
+      sum_output[i, 1] <- TType[i]
+      sum_output[i, 2] <- sum(merge_exp$SMinusL)
+      sum_output[i, 3] <- sum(merge_exp$BMinusL)
+      
+      sum_mtx[[j]] <- sum_output
+  
+  }
+}
+
+
+sum_mtx <- as.data.frame(sum_mtx)
+names(sum_mtx) <- c("Type", "R1_SML", "R1_BML", 
+                 "Delete1", "R2_SML", "R2_BML", 
+                 "Delete2", "R3_SML", "R3_BML", 
+                 "Delete3", "R4_SML", "R4_BML")
+sum_mtx$Delete1 <- NULL
+sum_mtx$Delete2 <- NULL
+sum_mtx$Delete3 <- NULL
+
+sum_mtx <- melt(sum_mtx, id.vars = 1)
+sum_mtx <- sum_mtx %>% separate(variable, c("Replicate", "Comparison"), sep = "_", remove = F) # Split replicate & comparison into two columns
+sum_mtx$variable <- NULL # Remove (now separated) variable column
+sum_mtx$value <- as.numeric(sum_mtx$value) # Convert sum to numeric
+sum_mtx$value <- abs(sum_mtx$value) # Take the absolute value
+
+sum_mtx$Comparison <- factor(sum_mtx$Comparison, c("SML", "BML"))
+
+
+if (identical(gene_set, activation_genelist)) {
+  act_sum <- sum_mtx
+  print("Activation")
+} else if (identical(gene_set, migration_genelist)) {
+    mig_sum <- sum_mtx
+    print("Migration")
+} else if (identical(gene_set, VariableFeatures(Tcell))) {
+      variablefeature_sum <- sum_mtx
+      print("Variable Features")
+} else if (identical(gene_set, unique(rownames(Tcell)))) {
+  allgene_sum <- sum_mtx
+  print("All Genes")
+  }
+
+# ggbarplot(test, x = "Type", y = "value", fill = "Comparison", color = "Comparison", position = position_dodge(), add = c("mean_se", "jitter"))
+ggbarplot(sum_mtx, x = "Type", y = "value", fill = "Comparison", color = "Comparison", position = position_dodge(), add = c("mean_sd", "jitter")) + 
+  scale_fill_manual(values = c("#D783FF", "#FF7E79")) +
+  scale_color_manual(values = c("#9437FF", "#FF2500")) +
+  theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+        axis.text.y = element_text(color = "black", face = "bold", size = 12),
+        axis.text.x = element_text(color = "black", face = "bold", size = 12),
+        axis.title.y = element_text(color = "black", face = "bold", size = 20),
+        axis.title.x = element_blank(),
+        legend.position = "top",
+        panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5)) +
+  ylim(0,15) +
+  ylab(expression(paste("|", Sigma, "(Diff. in Gene Expression)", "|"))) + 
+  stat_compare_means(aes(group = Comparison), label = "p.format", method = "wilcox.test", vjust = 5, size = 5) # p.signif or p.format
+
+```
+
+
+```{r Replicant plotting}
+
+# act_sum <- sum_mtx
+# mig_sum <- sum_mtx
+# allgene_sum <- sum_mtx
+
+# Activation
+# Plot size (WxH): 600 x 300
+m1 <- ggbarplot(act_sum, x = "Type", y = "value", fill = "Comparison", color = "Comparison", position = position_dodge(), add = c("mean_se", "jitter")) + 
+  scale_fill_manual(values = c("#D783FF", "#FF7E79")) +
+  scale_color_manual(values = c("#9437FF", "#FF2500")) +
+  theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+        axis.text.y = element_text(color = "black", face = "bold", size = 12),
+        axis.text.x = element_text(color = "black", face = "bold", size = 12),
+        axis.title.y = element_text(color = "black", face = "bold", size = 20),
+        axis.title.x = element_blank(),
+        legend.position = "none",
+        panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5)) +
+  ylim(0,10) +
+  ylab(expression(paste("|", Sigma, "(Diff. in Gene Expression)", "|"))) + 
+  stat_compare_means(aes(group = Comparison), label = "p.format", method = "wilcox.test", vjust = 5, size = 5) # p.signif or p.format
+
+# Migration
+# Plot size (WxH): 600 x 300
+m2 <- ggbarplot(mig_sum, x = "Type", y = "value", fill = "Comparison", color = "Comparison", position = position_dodge(), add = c("mean_se", "jitter")) + 
+  scale_fill_manual(values = c("#D783FF", "#FF7E79")) +
+  scale_color_manual(values = c("#9437FF", "#FF2500")) +
+  theme(panel.background = element_blank(),
+        panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+        axis.text.y = element_text(color = "black", face = "bold", size = 12),
+        axis.text.x = element_text(color = "black", face = "bold", size = 12),
+        axis.title.y = element_text(color = "black", face = "bold", size = 20),
+        axis.title.x = element_blank(),
+        legend.position = "none",
+        panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5)) +
+  ylim(0,10) +
+  ylab(expression(paste("|", Sigma, "(Diff. in Gene Expression)", "|"))) + 
+  stat_compare_means(aes(group = Comparison), label = "p.format", method = "wilcox.test", vjust = 5, size = 5) # p.signif or p.format
+
+# Plot size (WxH): 500 x 800
+cowplot::plot_grid(m1, m2, align = "v", ncol = 1)
+
+# Red outline #FF2500
+# Purple outline #9437FF
+# color = c("#9437FF", "#FF2500")
+
+# Plot size (WxH): 500 x 800
+ggbarplot(allgene_sum, x = "Type", y = "value", fill = "Comparison", color = "Comparison", 
+          position = position_dodge(0.8), add = c("mean_se", "jitter")) + 
+    scale_fill_manual(values = c("#D783FF", "#FF7E79")) +
+    scale_color_manual(values = c("#9437FF", "#FF2500")) +
+    theme(panel.background = element_blank(),
+          panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+          axis.text.y = element_text(color = "black", face = "bold", size = 20),
+          axis.text.x = element_text(color = "black", face = "bold", size = 20),
+          axis.title.y = element_text(color = "black", face = "bold", size = 20),
+          axis.title.x = element_blank(),
+          legend.position = "none",
+          panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5)) +
+    ylab(expression(bold(paste("|", Sigma, "(Diff. in Gene Expression)", "|")))) + 
+    stat_compare_means(aes(group = Comparison), label = "p.format", method = "wilcox.test", vjust = 5, size = 5) # p.signif or p.format
+
+ggbarplot(act_sum, x = "Type", y = "value", fill = "Comparison", color = "Comparison", 
+          position = position_dodge(0.8), add = c("mean_se", "jitter")) + 
+    scale_fill_manual(values = c("#D783FF", "#FF7E79")) +
+    scale_color_manual(values = c("#9437FF", "#FF2500")) +
+    theme(panel.background = element_blank(),
+          panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+          axis.text.y = element_text(color = "black", face = "bold", size = 20),
+          axis.text.x = element_text(color = "black", face = "bold", size = 20),
+          axis.title.y = element_text(color = "black", face = "bold", size = 20),
+          axis.title.x = element_blank(),
+          legend.position = "none",
+          panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5)) +
+    ylab(expression(bold(paste("|", Sigma, "(Diff. in Gene Expression)", "|")))) + 
+    stat_compare_means(aes(group = Comparison), label = "p.format", method = "wilcox.test", vjust = 5, size = 5) # p.signif or p.format
+
+
+#### For publication ####
+m1 <- ggbarplot(allgene_sum, x = "Type", y = "value", fill = "Comparison", color = "Comparison", 
+          position = position_dodge(0.8), add = c("mean_se", "jitter")) + 
+    scale_fill_manual(values = c("#D783FF", "#FF7E79")) +
+    scale_color_manual(values = c("#9437FF", "#FF2500")) +
+    theme(panel.background = element_blank(),
+          panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+          axis.text.y = element_text(color = "black", face = "bold", size = 20),
+          axis.text.x = element_text(color = "black", face = "bold", size = 20, angle = 45, vjust = 1, hjust = 1),
+          axis.title.y = element_text(color = "black", face = "bold", size = 20),
+          axis.title.x = element_blank(),
+          legend.position = "none",
+          panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5)) +
+    ylab(expression(bold(paste("|", Sigma, "(Diff. in Gene Expression)", "|"))))
+
+m2 <- ggbarplot(act_sum, x = "Type", y = "value", fill = "Comparison", color = "Comparison", 
+          position = position_dodge(0.8), add = c("mean_se", "jitter")) + 
+    scale_fill_manual(values = c("#D783FF", "#FF7E79")) +
+    scale_color_manual(values = c("#9437FF", "#FF2500")) +
+    theme(panel.background = element_blank(),
+          panel.grid.major.y = element_line(colour = "black", linetype = "dashed"),
+          axis.text.y = element_text(color = "black", face = "bold", size = 20),
+          axis.text.x = element_text(color = "black", face = "bold", size = 20, angle = 45, vjust = 1, hjust = 1),
+          axis.title.y = element_text(color = "black", face = "bold", size = 20),
+          axis.title.x = element_blank(),
+          legend.position = "none",
+          panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5)) +
+    ylab(expression(bold(paste("|", Sigma, "(Diff. in Gene Expression)", "|"))))
+
+# Plot size (WxH): 1000 x 500
+cowplot::plot_grid(m1, m2, align = "h", ncol = 2)
+
+```
+
+
+
+
+
+```{r Scatter plots}
+library(ggpmisc)
+
+temp <- subset(Tcell, subset = Tissue == "Lung")
+Idents(temp) <- "Lung"
+avg.lung <- as.data.frame(log1p(AverageExpression(temp, verbose = F)$RNA))
+avg.lung$gene <- rownames(avg.lung)
+names(avg.lung)[names(avg.lung) == "V1"] <- "Lung"
+
+temp <- subset(Tcell, subset = Tissue == "Scaffold")
+Idents(temp) <- "Scaffold"
+avg.scaf <- as.data.frame(log1p(AverageExpression(temp, verbose = F)$RNA))
+avg.scaf$gene <- rownames(avg.scaf)
+names(avg.scaf)[names(avg.scaf) == "V1"] <- "Scaffold"
+
+temp <- subset(Tcell, subset = Tissue == "Blood")
+Idents(temp) <- "Blood"
+avg.blood <- as.data.frame(log1p(AverageExpression(temp, verbose = F)$RNA))
+avg.blood$gene <- rownames(avg.blood)
+names(avg.blood)[names(avg.blood) == "V1"] <- "Blood"
+
+avg.exp <- merge(x = avg.lung, y = c(avg.scaf, avg.blood), by = "gene")
+rm(avg.lung, avg.scaf, avg.blood, temp)
+
+p1 <- ggplot(avg.exp, aes(x = Scaffold, y = Lung)) + geom_point() + 
+  stat_poly_line(formula = I(y - 0) ~ x + 0, color = "#9437FF") + 
+  stat_poly_eq(formula = I(y - 0) ~ x + 0, use_label(c("eq", "R2", "p"))) + 
+  theme(panel.background = element_blank(),
+        axis.text.y = element_text(color = "black", face = "bold", size = 20),
+        axis.text.x = element_text(color = "black", face = "bold", size = 20),
+        axis.title.y = element_text(color = "black", face = "bold", size = 20),
+        axis.title.x = element_text(color = "black", face = "bold", size = 20),
+        legend.position = "none",
+        panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5)) + 
+  ylim(0,10) + xlim(0,10) + 
+  xlab("Avg. Expression in the Scaffold") + ylab("Avg. Expression in the Lung")
+
+p2 <- ggplot(avg.exp, aes(x = Blood, y = Lung)) + geom_point() + 
+  stat_poly_line(formula = I(y - 0) ~ x + 0, color = "#FF2600") + 
+  stat_poly_eq(formula = I(y - 0) ~ x + 0, use_label(c("eq", "R2", "p"))) + 
+  theme(panel.background = element_blank(),
+        axis.text.y = element_text(color = "black", face = "bold", size = 20),
+        axis.text.x = element_text(color = "black", face = "bold", size = 20),
+        axis.title.y = element_text(color = "black", face = "bold", size = 20),
+        axis.title.x = element_text(color = "black", face = "bold", size = 20),
+        legend.position = "none",
+        panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5)) + ylim(0,10) + xlim(0,10) + 
+  xlab("Avg. Expression in the Blood") + ylab("")
+
+# Plot size (WxH): 1000 x 500
+cowplot::plot_grid(p1, p2, align = "h", ncol = 2)
+
+p3 <- ggplot(avg.exp, aes(x = Blood, y = Scaffold)) + geom_point() + geom_smooth(method=lm) + 
+  geom_text(x = 1, y = 8, label = paste("R^2 = ",
+                                        format(round(cor(avg.exp$Blood, avg.exp$Scaffold), 3), nsmall = 2))) + 
+  theme(panel.background = element_blank(),
+        axis.text.y = element_text(color = "black", face = "bold", size = 12),
+        axis.text.x = element_text(color = "black", face = "bold", size = 12),
+        axis.title.y = element_text(color = "black", face = "bold", size = 20),
+        axis.title.x = element_text(color = "black", face = "bold", size = 20),
+        legend.position = "none",
+        panel.border = element_rect(color = "black", fill=NA, linewidth = 1.5))
+
+cowplot::plot_grid(p1, p2, align = "h", ncol = 2)
+
+expression("(Diff. in Gene Expression)"^2)
+expression(R^2)
+
+```
+
